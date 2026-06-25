@@ -1,0 +1,7 @@
+.env
+data/rag_storage/*
+data/inputs/*
+data/prompts/*
+!data/rag_storage/.gitkeep
+!data/inputs/.gitkeep
+!data/prompts/.gitkeep

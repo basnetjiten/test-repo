@@ -1,0 +1,111 @@
+name: lightrag-server
+
+# Standalone LightRAG — no external database required.
+# All storage is file-based (JSON + NetworkX), mounted to ./data/
+# Set your OpenAI API key in the LLM_BINDING_API_KEY and EMBEDDING_BINDING_API_KEY below.
+
+services:
+  lightrag:
+    image: ghcr.io/hkuds/lightrag:v1.5.0rc2
+    container_name: lightrag
+    working_dir: /app
+    # No command override — the image entrypoint (lightrag_server.py) reads all config from env vars
+    ports:
+      - "9621:9621"
+    environment:
+      # ── Server ────────────────────────────────────────────────
+      HOST: "0.0.0.0"
+      PORT: "9621"
+      WORKERS: "1"
+      TIMEOUT: "180"
+      LOG_LEVEL: "INFO"
+      WORKING_DIR: "/app/data/rag_storage"
+      INPUT_DIR: "/app/data/inputs"
+      PROMPT_DIR: "/app/data/prompts"
+      WORKSPACE: "default"
+      WEBUI_TITLE: "EBProcess LightRAG"
+      WEBUI_DESCRIPTION: "Standalone LightRAG knowledge graph server"
+      SUMMARY_LANGUAGE: "English"
+      OLLAMA_EMULATING_MODEL_TAG: "latest"
+
+      # ── Auth ──────────────────────────────────────────────────
+      LIGHTRAG_API_KEY: "rH8Q1J6mWKNS1sREkzp3b2Yh79FpHjhA"
+      WHITELIST_PATHS: "/health"
+      AUTH_ACCOUNTS: "admin:LightRAG_Admin_2026!"
+      TOKEN_SECRET: "eqteL9bv4pkgDi7JuZdsp59SG_nGLhnk4DIacuS5ha6ilUgPuMgBhRye4YJnpTYe"
+      TOKEN_EXPIRE_HOURS: "8"
+
+      # ── Document pipeline ─────────────────────────────────────
+      LIGHTRAG_PARSER: "*:native-teP;*:legacy-R"
+      ENTITY_EXTRACTION_USE_JSON: "true"
+      MAX_PARALLEL_INSERT: "2"
+      MAX_ASYNC_LLM: "4"
+      VLM_PROCESS_ENABLE: "false"
+      MAX_UPLOAD_SIZE: "104857600"
+
+      # ── LLM — OpenAI ─────────────────────────────────────────
+      # ⚠️  Replace the value below with your real OpenAI API key
+      LLM_BINDING: "openai"
+      LLM_BINDING_HOST: "https://api.openai.com/v1"
+      LLM_BINDING_API_KEY: "YOUR_OPENAI_API_KEY_HERE"
+      LLM_MODEL: "gpt-4o-mini"
+      EXTRACT_LLM_MODEL: "gpt-4o-mini"
+      KEYWORD_LLM_MODEL: "gpt-4o-mini"
+      QUERY_LLM_MODEL: "gpt-4o-mini"
+
+      # ── Embedding — OpenAI ────────────────────────────────────
+      # ⚠️  Replace the value below with your real OpenAI API key
+      EMBEDDING_BINDING: "openai"
+      EMBEDDING_BINDING_HOST: "https://api.openai.com/v1"
+      EMBEDDING_BINDING_API_KEY: "YOUR_OPENAI_API_KEY_HERE"
+      EMBEDDING_MODEL: "text-embedding-3-small"
+      EMBEDDING_DIM: "1536"
+      EMBEDDING_TOKEN_LIMIT: "8192"
+      EMBEDDING_SEND_DIM: "false"
+      EMBEDDING_USE_BASE64: "true"
+
+      # ── Reranking ─────────────────────────────────────────────
+      RERANK_BINDING: "null"
+
+      # ── Storage — fully file-based, no external DB needed ─────
+      LIGHTRAG_KV_STORAGE: "JsonKVStorage"
+      LIGHTRAG_DOC_STATUS_STORAGE: "JsonDocStatusStorage"
+      LIGHTRAG_VECTOR_STORAGE: "NanoVectorDBStorage"
+      LIGHTRAG_GRAPH_STORAGE: "NetworkXStorage"
+
+    volumes:
+      - ./data/rag_storage:/app/data/rag_storage
+      - ./data/inputs:/app/data/inputs
+      - ./data/prompts:/app/data/prompts
+
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9621/health').read()"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+    restart: unless-stopped
+
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # ---------------------------------------------------------------------------
+  # Nginx reverse proxy — optional
+  # Start with: docker compose --profile proxy up -d
+  # ---------------------------------------------------------------------------
+  proxy:
+    profiles: ["proxy"]
+    image: nginx:1.27-alpine
+    depends_on:
+      lightrag:
+        condition: service_healthy
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx/lightrag.conf:/etc/nginx/conf.d/default.conf:ro
+    restart: unless-stopped
+
+networks:
+  default:
+    name: lightrag-shared
