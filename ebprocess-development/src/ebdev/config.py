@@ -32,6 +32,7 @@ class Config:
 
     # OpenCode executable & API keys
     OPENCODE_BIN: str = os.environ.get("OPENCODE_BIN", "opencode")
+    OPENCODE_SERVER_URL: str = os.environ.get("OPENCODE_SERVER_URL", "")
     OPENCODE_API_KEY: str = os.environ.get("OPENCODE_API_KEY", "")
     OPENCODE_MODEL: str = os.environ.get("OPENCODE_MODEL", "claude-3-5-sonnet")
     OPENCODE_PROJECT_DIR: str = os.environ.get(

@@ -224,6 +224,9 @@ class OpenCodeService:
         if config.OPENCODE_MODEL:
             cmd.extend([Commands.MODEL_FLAG, config.OPENCODE_MODEL])
 
+        if config.OPENCODE_SERVER_URL:
+            cmd.extend(["--attach", config.OPENCODE_SERVER_URL])
+
         cmd.append(prompts.build_prompt(job_context, storage_dir=storage_dir, session_id=session_id))
 
         env_extra: dict[str, str] = {
