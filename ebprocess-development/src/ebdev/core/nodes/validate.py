@@ -13,22 +13,21 @@ from ebdev.core.nodes.common import send_progress
 
 
 async def validate_node(state: GraphState) -> GraphState:
-    """Run code verification (linters/tests) concurrently for all platforms using Strategy patterns."""
+    """Run code verification (linters/tests) concurrently for all active stage platforms."""
     state.last_node = "validate"
     ctx = state.context
-    platforms = ctx.platforms
+    active_platforms = state.strategy.stages[state.current_stage] if (state.strategy and state.strategy.stages) else ctx.platforms
     repo_path = Path(ctx.repo_path)
     
-    await send_progress(state, "Validating: Running platform linter and test validation concurrently...")
+    await send_progress(state, f"Validating: Running stage {state.current_stage + 1} linter and test validation concurrently...")
     start_time = time.time()
     
     platform_errors: dict[str, list[str]] = {}
-    validation_outputs: dict[str, str] = {}
     
     # 1. Async Validation Worker Function
     async def validate_single_platform(platform: str) -> tuple[str, list[str]]:
         print(f"[validate][{platform}] Running checks...")
-        if len(platforms) > 1:
+        if len(ctx.platforms) > 1:
             plat_path = repo_path / platform
         else:
             plat_path = repo_path
@@ -42,18 +41,18 @@ async def validate_node(state: GraphState) -> GraphState:
             return platform, [err_msg]
 
     try:
-        # Run all platform validation checks concurrently
-        runs = await asyncio.gather(*[validate_single_platform(p) for p in platforms])
+        # Run active platform validation checks concurrently
+        runs = await asyncio.gather(*[validate_single_platform(p) for p in active_platforms])
         platform_errors = dict(runs)
         
         duration = round(time.time() - start_time, 2)
-        print(f"[validate] Concurrence checks completed in {duration}s.")
+        print(f"[validate] Stage {state.current_stage + 1} checks completed in {duration}s.")
 
         # Consolidate results: Graph passes ONLY if all platform error lists are empty
         all_passed = True
         combined_errors = []
-        done_platforms = {}
-        failed_platforms = {}
+        done_platforms = {**state.done_platforms}
+        failed_platforms = {**state.failed_platforms}
 
         for p, errs in platform_errors.items():
             if errs:
@@ -67,7 +66,17 @@ async def validate_node(state: GraphState) -> GraphState:
                 failed_platforms[p] = False
                 print(f"[validate][{p}] PASSED")
 
+        # Determine if we should proceed to the next stage or finish
+        next_stage = state.current_stage
+        stages_finished = True
+        if all_passed and state.strategy and state.strategy.stages:
+            if state.current_stage < len(state.strategy.stages) - 1:
+                next_stage = state.current_stage + 1
+                stages_finished = False
+
         status_msg = "All validations passed." if all_passed else f"Validation failed with {len(combined_errors)} check errors. Repair needed."
+        if all_passed and not stages_finished:
+            status_msg = f"Stage {state.current_stage + 1} passed. Advancing to stage {next_stage + 1}..."
         await send_progress(state, status_msg)
 
         # Update context validation errors
@@ -75,7 +84,8 @@ async def validate_node(state: GraphState) -> GraphState:
 
         return state.model_copy(update={
             "context": updated_ctx,
-            "done": all_passed,
+            "done": all_passed and stages_finished,
+            "current_stage": next_stage,
             "done_platforms": done_platforms,
             "failed_platforms": failed_platforms
         })

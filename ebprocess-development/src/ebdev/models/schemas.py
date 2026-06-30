@@ -37,6 +37,8 @@ class JobContext(BaseModel):
     # Feature and phase metadata
     feature_name: str = ""
     ticket_label: str = "feature"
+    mocking_level: str = "live"
+    offline_first: bool = False
 
     # Progress tracking properties
     repair_iteration: int = Field(0, exclude=True)
@@ -116,8 +118,21 @@ class JobResult(BaseModel):
         return self.pr_url
 
 
+class OrchestrationStrategy(BaseModel):
+    complexity: str  # "low" | "medium" | "high"
+    offline_first: bool = False
+    ui_ux_only: bool = False
+    execution_mode: str  # "parallel" | "sequential" | "mock_first"
+    stages: List[List[str]] = Field(default_factory=list)
+    mocking_level: str = "live"  # "live" | "mock_repositories" | "ui_stubs"
+    max_repair_iterations: int = 3
+    reasoning: str = ""
+
+
 class GraphState(BaseModel):
     context: JobContext
+    strategy: Optional[OrchestrationStrategy] = None
+    current_stage: int = 0
     plan_path: Optional[str] = None
     done: bool = False
     retry_count: int = 0

@@ -15,13 +15,13 @@ from ebdev.core.nodes.common import send_progress
 
 
 async def generate_node(state: GraphState) -> GraphState:
-    """Invokes builder agents concurrently for active platforms using asyncio.gather."""
+    """Invokes builder agents concurrently for active stage platforms using asyncio.gather."""
     state.last_node = "generate"
-    await send_progress(state, "Coding: Generating code implementations concurrently...")
+    await send_progress(state, f"Coding: Generating stage {state.current_stage + 1} code implementations concurrently...")
     start_time = time.time()
     
     ctx = state.context
-    platforms = ctx.platforms
+    platforms = state.strategy.stages[state.current_stage] if (state.strategy and state.strategy.stages) else ctx.platforms
     repo_path = Path(ctx.repo_path)
     
     # If the previous planning step failed, skip code generation
@@ -37,20 +37,20 @@ async def generate_node(state: GraphState) -> GraphState:
     async def generate_single_platform(platform: str) -> tuple[str, JobResult, str | None]:
         print(f"[generate][{platform}] Running builder...")
         
-        # Check if platform is already done and successfully validated in previous iterations
+        # Check if platform is already done and successfully validated in previous stages/iterations
         if state.done_platforms.get(platform) is True:
             print(f"[generate][{platform}] Skipping because platform already successfully validated.")
             existing_result = state.platform_results.get(platform) or JobResult(
-                job_id=ctx.jira_ticket_id,
-                jira_space_name=ctx.jira_space_name,
-                jira_id=ctx.jira_ticket_id,
+                job_id=ctx.ticket_id,
+                space_name=ctx.space_name,
+                ticket_id=ctx.ticket_id,
                 status="success",
-                summary="Skip: Platform successfully validated in previous iteration."
+                summary="Builder skipped. Previously validated successfully."
             )
             return platform, existing_result, session_ids.get(platform)
         
         # Verify plan file exists
-        if len(platforms) > 1:
+        if len(ctx.platforms) > 1:
             plat_path = repo_path / platform
             plan_file = plans_dir / f"{platform}_plan.md"
         else:

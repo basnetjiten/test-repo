@@ -18,12 +18,12 @@ async def repair_node(state: GraphState) -> GraphState:
     await send_progress(state, msg)
     start_time = time.time()
     ctx = state.context
-    platforms = ctx.platforms
+    active_platforms = state.strategy.stages[state.current_stage] if (state.strategy and state.strategy.stages) else ctx.platforms
     
     try:
-        # Determine which platforms failed
-        failed_plats = [p for p in platforms if state.failed_platforms.get(p)]
-        print(f"[repair] Failed platforms requiring repair: {failed_plats}")
+        # Determine which platforms failed in the active stage
+        failed_plats = [p for p in active_platforms if state.failed_platforms.get(p)]
+        print(f"[repair] Active stage failed platforms requiring repair: {failed_plats}")
 
         # Gather errors only from failing platforms
         failed_errors = []

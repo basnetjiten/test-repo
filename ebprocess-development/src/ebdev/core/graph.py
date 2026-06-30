@@ -8,6 +8,7 @@ from langgraph.graph import StateGraph, END
 from ebdev.models.schemas import GraphState
 from ebdev.core.nodes import (
     prepare_node,
+    orchestrate_node,
     plan_node,
     generate_node,
     validate_node,
@@ -34,10 +35,18 @@ def _route_after_generate(state: GraphState) -> str:
 
 
 def _route_after_validate(state: GraphState) -> str:
-    """Route to contract check on pass, repair on fail."""
+    """Route to next planning stage on success, repair on failure, or contract when finished."""
+    active_platforms = state.strategy.stages[state.current_stage] if (state.strategy and state.strategy.stages) else state.context.platforms
+    has_failures = any(state.failed_platforms.get(p) for p in active_platforms)
+    
+    if has_failures:
+        return "repair"
+        
     if state.done:
         return "contract"
-    return "repair"
+        
+    # No failures in the current stage, but not all stages completed -> loop back to plan next stage
+    return "plan"
 
 
 def _route_after_contract(state: GraphState) -> str:
@@ -49,7 +58,7 @@ def _route_after_contract(state: GraphState) -> str:
 
 def _route_after_repair(state: GraphState) -> str:
     """Route to finalize if max retries hit, otherwise back to generate."""
-    if state.done:  # max iterations reached WITH/WITHOUT success (done=True)
+    if state.done:  # max iterations reached (failed or successful)
         return "finalize"
     return "generate"
 
@@ -61,6 +70,7 @@ def build_graph() -> StateGraph:
 
     # Add execution nodes
     builder.add_node("prepare", prepare_node)
+    builder.add_node("orchestrate", orchestrate_node)
     builder.add_node("plan", plan_node)
     builder.add_node("generate", generate_node)
     builder.add_node("validate", validate_node)
@@ -71,7 +81,8 @@ def build_graph() -> StateGraph:
 
     # Establish routing edges
     builder.set_entry_point("prepare")
-    builder.add_edge("prepare", "plan")
+    builder.add_edge("prepare", "orchestrate")
+    builder.add_edge("orchestrate", "plan")
 
     builder.add_conditional_edges("plan", _route_after_plan, {
         "generate": "generate",
@@ -86,6 +97,7 @@ def build_graph() -> StateGraph:
     builder.add_conditional_edges("validate", _route_after_validate, {
         "contract": "contract",
         "repair": "repair",
+        "plan": "plan",
     })
 
     builder.add_conditional_edges("contract", _route_after_contract, {

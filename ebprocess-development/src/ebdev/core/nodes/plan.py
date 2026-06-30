@@ -14,13 +14,13 @@ from ebdev.core.nodes.common import send_progress
 
 
 async def plan_node(state: GraphState) -> GraphState:
-    """Invokes planners concurrently for all active platforms using asyncio.gather."""
+    """Invokes planners concurrently for all active stage platforms using asyncio.gather."""
     state.last_node = "plan"
-    await send_progress(state, "Planning: Analyzing multi-platform architecture and requirements...")
+    await send_progress(state, f"Planning: Analyzing stage {state.current_stage + 1} architecture and requirements...")
     start_time = time.time()
     
     ctx = state.context
-    platforms = ctx.platforms
+    platforms = state.strategy.stages[state.current_stage] if (state.strategy and state.strategy.stages) else ctx.platforms
     repo_path = Path(ctx.repo_path)
     
     plans_dir = Path(config.OPENCODE_PROJECT_DIR) / "plans"
@@ -32,7 +32,7 @@ async def plan_node(state: GraphState) -> GraphState:
     async def plan_single_platform(platform: str) -> tuple[str, JobResult]:
         print(f"[plan][{platform}] Running planner...")
         
-        if len(platforms) > 1:
+        if len(ctx.platforms) > 1:
             plat_path = repo_path / platform
             plan_file = plans_dir / f"{platform}_plan.md"
         else:

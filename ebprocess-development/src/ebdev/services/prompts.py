@@ -69,6 +69,17 @@ EXAMPLE:
     # Builder / Implementer instructions
     else:
         repo_path = Path(job_context.repo_path)
+        
+        mock_req = ""
+        if job_context.mocking_level == "mock_repositories":
+            mock_req = "- MOCKING REQUIRED: Isolate network API client calls behind clean repositories. Generate stateful Mock Repository classes with local simulated data to build decoupled, visually interactive screens.\n"
+        elif job_context.mocking_level == "ui_stubs":
+            mock_req = "- UI STUBS ONLY: Implement visual presentations and UI stubs without full logic/network integration.\n"
+
+        offline_req = ""
+        if job_context.offline_first:
+            offline_req = "- OFFLINE-FIRST ARCHITECTURE: Enforce local storage as the single source of truth. UI must read from/write to local DB (e.g. Drift/Hive/Isar). Save mutations locally with a 'pending' status and implement queue/sync mechanisms to pull/push server updates.\n"
+
         return f"""<{Prompts.INSTRUCTIONS_TAG}>
 {Prompts.PHASE_IMPLEMENTATION}
 
@@ -76,7 +87,7 @@ EXAMPLE:
 - You MUST implement the plan found at {plan_path}
 - If that file does not exist, immediately output: {{"status": "error", "reason": "{ErrorMessages.PLAN_MISSING.format(plan_path=plan_path)}"}} and stop.
 - Edit or write files under the repository workspace directory to implement the plan.
-</REQUIREMENTS>
+{mock_req}{offline_req}</REQUIREMENTS>
 
 <VERIFICATION_PROTOCOL>
 1. Before finishing, run `git status` to verify files under the repository workspace have changed.
