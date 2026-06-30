@@ -11,6 +11,7 @@ from pathlib import Path
 from urllib.parse import quote, urlparse, urlunparse
 
 from ebdev.config import config
+from ebdev.core.exceptions import GitServiceError
 from ebdev.core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -113,7 +114,7 @@ class GitService:
                     logger.info(f"Cloning starter kit from {starter_kit_url}...")
                     subprocess.run(["git", "clone", starter_clone_url, str(self.repo_path)], check=True, env=self.env)
                 except subprocess.CalledProcessError as e:
-                    raise RuntimeError(f"Failed to clone starter kit: {e.stderr}")
+                    raise GitServiceError(f"Failed to clone starter kit: {e.stderr}")
 
                 self._run(["remote", "remove", "origin"])
                 self._run(["remote", "add", "origin", target_clone_url])
@@ -125,7 +126,7 @@ class GitService:
                         break
                     except subprocess.CalledProcessError as e:
                         if i == max_retries - 1:
-                            raise RuntimeError(
+                            raise GitServiceError(
                                 f"Failed to push to remote after {max_retries} attempts: {e.stderr}"
                             )
                         logger.warning(f"Push failed, retrying in 5s... ({i+1}/{max_retries})")

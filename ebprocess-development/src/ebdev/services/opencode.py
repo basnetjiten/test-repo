@@ -15,6 +15,7 @@ from pydantic import ValidationError
 
 from ebdev.config import config
 from ebdev.core.constants import Agents, ErrorMessages, RegexPatterns
+from ebdev.core.exceptions import OpenCodeExecutionError
 from ebdev.core.logger import get_logger
 from ebdev.models.schemas import JobContext, JobResult
 from ebdev.services import prompts
@@ -170,7 +171,7 @@ class OpenCodeService:
                 session_id = await client.create_session(title=f"Job {job_context.jira_ticket_id}")
             except Exception as e:
                 logger.error(f"Failed to create agent execution session: {e}")
-                raise RuntimeError(f"OpenCode session creation failed: {e}")
+                raise OpenCodeExecutionError(f"OpenCode session creation failed: {e}")
 
         # 2. Concurrently read Server-Sent Events (SSE) to print deltas
         async def event_streamer():
@@ -207,7 +208,7 @@ class OpenCodeService:
             )
         except Exception as e:
             logger.error(f"Failed to execute agent instructions on server: {e}")
-            raise RuntimeError(f"OpenCode execution failed: {e}")
+            raise OpenCodeExecutionError(f"OpenCode execution failed: {e}")
         finally:
             stream_task.cancel()
             await asyncio.gather(stream_task, return_exceptions=True)

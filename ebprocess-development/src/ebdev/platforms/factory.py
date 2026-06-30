@@ -8,6 +8,7 @@ from ebdev.platforms.flutter import FlutterStrategy
 from ebdev.platforms.api import ApiStrategy
 from ebdev.platforms.web import WebStrategy
 from ebdev.platforms.cms import CmsStrategy
+from ebdev.core.exceptions import UnsupportedPlatformError
 
 # Strategy Cache Singletons
 _STRATEGY_MAP: dict[str, PlatformStrategy] = {
@@ -33,7 +34,7 @@ def get_platform_strategy(platform: str) -> PlatformStrategy:
     """
     key = platform.strip().lower()
     if key not in _STRATEGY_MAP:
-        raise ValueError(
+        raise UnsupportedPlatformError(
             f"Unsupported platform '{platform}'. "
             f"Supported platforms: {list(_STRATEGY_MAP.keys())}"
         )

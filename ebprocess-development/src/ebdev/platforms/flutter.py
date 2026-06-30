@@ -7,6 +7,7 @@ from pathlib import Path
 
 from ebdev.platforms.base import PlatformStrategy
 from ebdev.services import flutter_cmd
+from ebdev.core.exceptions import PlatformStrategyError
 from ebdev.core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -21,7 +22,7 @@ class FlutterStrategy(PlatformStrategy):
         output_lines: list[str] = []
         if not await flutter_cmd.pub_get(str(repo_path), output=output_lines):
             err_msg = output_lines[-1] if output_lines else "flutter pub get failed"
-            raise RuntimeError(f"Flutter preparation failure: {err_msg}")
+            raise PlatformStrategyError(f"Flutter preparation failure: {err_msg}")
 
     async def validate(self, repo_path: Path) -> list[str]:
         """Run pub get, build_runner, and analyze. Fail only on lint errors."""
@@ -57,7 +58,7 @@ class FlutterStrategy(PlatformStrategy):
         output_lines: list[str] = []
 
         if not await flutter_cmd.create(str(repo_path), output=output_lines):
-            raise RuntimeError("Failed to scaffold Flutter project template.")
+            raise PlatformStrategyError("Failed to scaffold Flutter project template.")
 
         # Sync/bootstrap actions
         await flutter_cmd.simplex_init(str(repo_path), output=output_lines)

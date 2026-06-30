@@ -11,6 +11,7 @@ from ebdev.config import config
 from ebdev.models.schemas import GraphState
 from ebdev.services.git import GitService, GitConflictError, RemoteRepoService
 from ebdev.platforms import get_platform_strategy
+from ebdev.core.exceptions import GitServiceError
 from ebdev.core.nodes.common import send_progress
 
 
@@ -86,7 +87,7 @@ async def prepare_node(state: GraphState) -> GraphState:
                 try:
                     await asyncio.to_thread(git.sync_with_main, ctx.branch or "main")
                 except GitConflictError:
-                    raise RuntimeError(f"Git conflict detected during sync with main on platform {platform}")
+                    raise GitServiceError(f"Git conflict detected during sync with main on platform {platform}")
 
             # Bootstrap skeleton if needed
             strategy = get_platform_strategy(platform)
@@ -114,7 +115,7 @@ async def prepare_node(state: GraphState) -> GraphState:
     except Exception as e:
         err = f"Concurrent preparation phase failed: {str(e)}"
         print(f"[prepare] ERROR: {err}")
-        raise RuntimeError(err) from e
+        raise GitServiceError(err) from e
 
     # Update state context values
     sanitized_feature_slug = _sanitize_feature_name(ctx.feature_name or ctx.jira_ticket.title)
