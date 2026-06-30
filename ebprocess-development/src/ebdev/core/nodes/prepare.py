@@ -9,7 +9,7 @@ from pathlib import Path
 
 from ebdev.config import config
 from ebdev.models.schemas import GraphState
-from ebdev.services.git import GitService, GitConflictError
+from ebdev.services.git import GitService, GitConflictError, RemoteRepoService
 from ebdev.platforms import get_platform_strategy
 from ebdev.core.nodes.common import send_progress
 
@@ -53,9 +53,27 @@ async def prepare_node(state: GraphState) -> GraphState:
             
             git = GitService(plat_path)
 
-            # Clone or Fetch
-            if ctx.project_repo:
-                await asyncio.to_thread(git.clone_or_fetch, ctx.project_repo, ctx.starter_kit_url)
+            # Resolve platform-specific repo URL (e.g. suffix repo with -platform if multiple)
+            plat_repo_url = ctx.project_repo
+            if plat_repo_url and len(platforms) > 1:
+                # Suffix base name with platform name
+                clean_url = plat_repo_url.strip().replace(".git", "")
+                if f"-{platform}" not in clean_url and f"_{platform}" not in clean_url:
+                    if plat_repo_url.endswith(".git"):
+                        plat_repo_url = plat_repo_url[:-4] + f"-{platform}.git"
+                    else:
+                        plat_repo_url = plat_repo_url + f"-{platform}"
+
+            # Check and auto-create remote repository if missing
+            if plat_repo_url:
+                jira_proj_key = ctx.jira_ticket.key.split("-")[0] if ctx.jira_ticket and "-" in ctx.jira_ticket.key else "PROJ"
+                await send_progress(state, f"Checking/creating remote repository: {plat_repo_url}...")
+                repo_exists = await RemoteRepoService.ensure_repo_exists(plat_repo_url, jira_project_key=jira_proj_key)
+                if not repo_exists:
+                    print(f"[prepare][{platform}] Warning: Remote repository setup returned error for {plat_repo_url}")
+
+                # Clone or Fetch using the platform repo URL
+                await asyncio.to_thread(git.clone_or_fetch, plat_repo_url, ctx.starter_kit_url)
 
             # Sanitized branch checkout
             sanitized_feature = _sanitize_branch_name(ctx.feature_name or ctx.jira_ticket.title)

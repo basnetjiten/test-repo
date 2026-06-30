@@ -209,3 +209,136 @@ class GitService:
         remote_target = self.inject_token(repo_url) if repo_url else "origin"
         logger.info(f"Pushing branch {branch_name} to remote...")
         self._run(["push", remote_target, branch_name])
+
+
+class RemoteRepoService:
+    """Service to check, create, and verify remote repositories in Bitbucket or GitHub."""
+
+    @staticmethod
+    def parse_repo_url(repo_url: str) -> tuple[str, str, str] | None:
+        """
+        Parse repo URL into (provider, owner/workspace, slug).
+        Returns None if not parseable.
+        """
+        if not repo_url:
+            return None
+        
+        # Remove git ssh prefix or protocol prefix
+        clean = repo_url.strip().replace(".git", "")
+        
+        provider = "bitbucket" if "bitbucket" in clean.lower() else "github"
+        
+        # If SSH: git@bitbucket.org:workspace/slug
+        if "git@" in clean:
+            # Split after :
+            parts = clean.split(":")[-1].split("/")
+            if len(parts) >= 2:
+                return provider, parts[-2], parts[-1]
+        else:
+            # If HTTPS: https://bitbucket.org/workspace/slug
+            # parse path
+            parsed = urlparse(repo_url)
+            path_parts = [p for p in parsed.path.split("/") if p]
+            if len(path_parts) >= 2:
+                return provider, path_parts[-2], path_parts[-1]
+                
+        return None
+
+    @classmethod
+    async def ensure_repo_exists(cls, repo_url: str, jira_project_key: str = "PROJ") -> bool:
+        """
+        Check if remote repository exists. If not, attempt to create it.
+        Returns True if repo exists or was successfully created, False otherwise.
+        """
+        parsed = cls.parse_repo_url(repo_url)
+        if not parsed:
+            logger.warning(f"Could not parse repository URL: {repo_url}. Skipping auto-creation checks.")
+            return True
+            
+        provider, workspace, slug = parsed
+        logger.info(f"Checking remote repository: provider={provider}, workspace/owner={workspace}, slug={slug}")
+        
+        import httpx
+        
+        if provider == "bitbucket":
+            # Auth
+            user = config.BITBUCKET_USERNAME or config.GIT_USER
+            token = config.BITBUCKET_APP_PASSWORD or config.GIT_TOKEN
+            auth = (user, token) if user and token else None
+            
+            get_url = f"https://api.bitbucket.org/2.0/repositories/{workspace}/{slug}"
+            
+            async with httpx.AsyncClient() as client:
+                try:
+                    res = await client.get(get_url, auth=auth)
+                    if res.status_code == 200:
+                        logger.info(f"Bitbucket repository '{workspace}/{slug}' exists.")
+                        return True
+                    elif res.status_code == 404:
+                        logger.info(f"Bitbucket repository '{workspace}/{slug}' not found. Creating...")
+                        create_url = f"https://api.bitbucket.org/2.0/repositories/{workspace}/{slug}"
+                        payload = {
+                            "scm": "git",
+                            "is_private": True,
+                            "project": {"key": jira_project_key}
+                        }
+                        create_res = await client.post(create_url, json=payload, auth=auth)
+                        if create_res.status_code in (200, 201):
+                            logger.info(f"Bitbucket repository '{workspace}/{slug}' successfully created.")
+                            return True
+                        else:
+                            logger.error(f"Failed to create Bitbucket repository: {create_res.status_code} - {create_res.text}")
+                            return False
+                    else:
+                        logger.warning(f"Unexpected Bitbucket status check response code: {res.status_code}")
+                        return True # fallback to let git clone handle it
+                except Exception as e:
+                    logger.error(f"Error during Bitbucket remote repository check/create: {e}")
+                    return True
+                    
+        elif provider == "github":
+            token = config.GITHUB_TOKEN or config.GIT_TOKEN
+            headers = {
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28"
+            }
+            if token:
+                headers["Authorization"] = f"token {token}"
+                
+            get_url = f"https://api.github.com/repos/{workspace}/{slug}"
+            
+            async with httpx.AsyncClient() as client:
+                try:
+                    res = await client.get(get_url, headers=headers)
+                    if res.status_code == 200:
+                        logger.info(f"GitHub repository '{workspace}/{slug}' exists.")
+                        return True
+                    elif res.status_code == 404:
+                        logger.info(f"GitHub repository '{workspace}/{slug}' not found. Creating...")
+                        # If workspace matches config username, it's a personal repo. Otherwise it's an org.
+                        user = config.GITHUB_USER or config.GIT_USER
+                        
+                        if workspace.lower() == user.lower():
+                            create_url = "https://api.github.com/user/repos"
+                        else:
+                            create_url = f"https://api.github.com/orgs/{workspace}/repos"
+                            
+                        payload = {
+                            "name": slug,
+                            "private": True
+                        }
+                        create_res = await client.post(create_url, json=payload, headers=headers)
+                        if create_res.status_code in (200, 201):
+                            logger.info(f"GitHub repository '{workspace}/{slug}' successfully created.")
+                            return True
+                        else:
+                            logger.error(f"Failed to create GitHub repository: {create_res.status_code} - {create_res.text}")
+                            return False
+                    else:
+                        logger.warning(f"Unexpected GitHub status check response code: {res.status_code}")
+                        return True
+                except Exception as e:
+                    logger.error(f"Error during GitHub remote repository check/create: {e}")
+                    return True
+                    
+        return True
