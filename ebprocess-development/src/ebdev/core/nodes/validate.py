@@ -1,19 +1,62 @@
 # -*- coding: utf-8 -*-
-"""Validate node - checks code linting, compilation, and tests concurrently."""
+"""
+validate.py
+===========
+Validate node - checks code linting, compilation, and tests concurrently.
+
+Responsibilities
+----------------
+* Identify active platforms for the current stage or wave.
+* Run platform validation checks (linting, tests, compilation) concurrently.
+* Aggregate and record validation errors on failure.
+* Update SPOQ task status on task success.
+* Handle system-level errors during the validation phase.
+"""
 
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from ebdev.models.schemas import GraphState
-from ebdev.platforms import get_platform_strategy
+from ebdev.core.exceptions import EbDevError
 from ebdev.core.nodes.common import send_progress
+from ebdev.core.spoq_utils import get_active_wave_tasks, update_spoq_task_status
+from ebdev.platforms import get_platform_strategy
+
+if TYPE_CHECKING:
+    from ebdev.models.schemas import GraphState
+
+# ---------------------------------------------------------------------------
+# Module-level logger
+# ---------------------------------------------------------------------------
+logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Node Entry Point
+# ---------------------------------------------------------------------------
 async def validate_node(state: GraphState) -> GraphState:
-    """Run code verification (linters/tests) concurrently for all active stage platforms."""
+    """
+    Run code verification concurrently for all active stage platforms.
+
+    Parameters
+    ----------
+    state : GraphState
+        The current state of the workflow graph.
+
+    Returns
+    -------
+    GraphState
+        The updated state with the validation results.
+
+    Raises
+    ------
+    ValueError
+        If the SPOQ epic task directory is missing when execution mode is SPOQ.
+    """
     state.last_node = "validate"
     ctx = state.context
     
@@ -22,7 +65,6 @@ async def validate_node(state: GraphState) -> GraphState:
     if is_spoq:
         if ctx.spoq_epic_dir is None:
             raise ValueError("spoq_epic_dir cannot be None when execution_mode is 'spoq'")
-        from ebdev.core.spoq_utils import get_active_wave_tasks
         active_tasks = get_active_wave_tasks(ctx.spoq_epic_dir)
         platforms = []
         for t in active_tasks:
@@ -39,7 +81,7 @@ async def validate_node(state: GraphState) -> GraphState:
     
     # 1. Async Validation Worker Function
     async def validate_single_platform(platform: str) -> tuple[str, list[str]]:
-        print(f"[validate][{platform}] Running checks...")
+        logger.info("[%s] Running checks...", platform)
         if len(ctx.platforms) > 1:
             plat_path = repo_path / platform
         else:
@@ -49,7 +91,7 @@ async def validate_node(state: GraphState) -> GraphState:
         try:
             errors = await strategy.validate(plat_path)
             return platform, errors
-        except Exception as e:
+        except (EbDevError, OSError, asyncio.TimeoutError) as e:
             err_msg = f"System check exception during validation on platform {platform}: {str(e)}"
             return platform, [err_msg]
 
@@ -59,7 +101,7 @@ async def validate_node(state: GraphState) -> GraphState:
         platform_errors = dict(runs)
         
         duration = round(time.time() - start_time, 2)
-        print(f"[validate] Stage {state.current_stage + 1} checks completed in {duration}s.")
+        logger.info("Stage %d checks completed in %ss.", state.current_stage + 1, duration)
 
         # Consolidate results: Graph passes ONLY if all platform error lists are empty
         all_passed = True
@@ -73,17 +115,17 @@ async def validate_node(state: GraphState) -> GraphState:
                 combined_errors.extend([f"[{p}] {e}" for e in errs])
                 done_platforms[p] = False
                 failed_platforms[p] = True
-                print(f"[validate][{p}] FAILED with {len(errs)} error(s)")
+                logger.info("[%s] FAILED with %d error(s)", p, len(errs))
             else:
                 done_platforms[p] = True
                 failed_platforms[p] = False
-                print(f"[validate][{p}] PASSED")
+                logger.info("[%s] PASSED", p)
 
         # Determine if we should proceed to the next stage or finish
         next_stage = state.current_stage
         stages_finished = True
         
-        if all_passed and not is_spoq and state.strategy and hasattr(state.strategy, 'stages'):
+        if all_passed and not is_spoq and state.strategy and state.strategy.stages:
             if state.current_stage < len(state.strategy.stages) - 1:
                 next_stage = state.current_stage + 1
                 stages_finished = False
@@ -97,12 +139,11 @@ async def validate_node(state: GraphState) -> GraphState:
         updated_ctx = ctx.model_copy(update={"validation_errors": combined_errors})
 
         # Check if validation passed for all platforms
-        if all_passed and is_spoq:
+        if all_passed and is_spoq and ctx.spoq_epic_dir is not None:
             # Mark active SPOQ tasks as completed!
-            from ebdev.core.spoq_utils import update_spoq_task_status
             for t in active_tasks:
                 update_spoq_task_status(ctx.spoq_epic_dir, t["id"], "completed")
-            print("[validate] Marked SPOQ tasks as completed for the current wave.")
+            logger.info("Marked SPOQ tasks as completed for the current wave.")
 
         return state.model_copy(update={
             "context": updated_ctx,
@@ -112,9 +153,9 @@ async def validate_node(state: GraphState) -> GraphState:
             "failed_platforms": failed_platforms
         })
 
-    except Exception as e:
+    except (EbDevError, ValueError, KeyError, RuntimeError) as e:
         err_msg = f"System failure during validation phase: {str(e)}"
-        print(f"[validate] {err_msg}")
+        logger.error(err_msg)
         await send_progress(state, "Validation failed due to validation system error.")
         
         updated_ctx = ctx.model_copy(update={"validation_errors": [err_msg]})

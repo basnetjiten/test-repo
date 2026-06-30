@@ -1,17 +1,59 @@
 # -*- coding: utf-8 -*-
-"""Repair node - manages retry counts and platform-specific error aggregation for recovery."""
+"""
+repair.py
+=========
+Repair node - manages retry counts and platform-specific error aggregation for recovery.
+
+Responsibilities
+----------------
+* Identify active failing platforms for the current stage.
+* Aggregate validation errors for subsequent repair steps.
+* Update retry iteration counters and validate boundaries.
+* Determine when repair iterations have exceeded configured limits.
+"""
 
 from __future__ import annotations
 
-from pathlib import Path
+import logging
 import time
+from typing import TYPE_CHECKING
+
 from ebdev.config import config
-from ebdev.models.schemas import GraphState, JobResult
 from ebdev.core.nodes.common import send_progress
+from ebdev.core.spoq_utils import get_active_wave_tasks
+from ebdev.models.schemas import JobResult
+
+if TYPE_CHECKING:
+    from ebdev.models.schemas import GraphState
+
+# ---------------------------------------------------------------------------
+# Module-level logger
+# ---------------------------------------------------------------------------
+logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Node Entry Point
+# ---------------------------------------------------------------------------
 async def repair_node(state: GraphState) -> GraphState:
-    """Analyze failed platforms, formatting repair contexts and retry counts."""
+    """
+    Analyze failed platforms, formatting repair contexts and retry counts.
+
+    Parameters
+    ----------
+    state : GraphState
+        The current state of the workflow graph.
+
+    Returns
+    -------
+    GraphState
+        The updated state with repair retry counters or job failure results.
+
+    Raises
+    ------
+    ValueError
+        If the SPOQ epic task directory is missing when execution mode is SPOQ.
+    """
     state.last_node = "repair"
     iteration = state.context.repair_iteration + 1
     
@@ -24,7 +66,6 @@ async def repair_node(state: GraphState) -> GraphState:
     if is_spoq:
         if ctx.spoq_epic_dir is None:
             raise ValueError("spoq_epic_dir cannot be None when execution_mode is 'spoq'")
-        from ebdev.core.spoq_utils import get_active_wave_tasks
         tasks = get_active_wave_tasks(ctx.spoq_epic_dir)
         active_platforms = []
         for t in tasks:
@@ -32,12 +73,11 @@ async def repair_node(state: GraphState) -> GraphState:
         active_platforms = list(dict.fromkeys(active_platforms))
     else:
         active_platforms = state.strategy.stages[state.current_stage] if (state.strategy and state.strategy.stages) else ctx.platforms
-    repo_path = Path(ctx.repo_path)
     
     try:
         # Determine which platforms failed in the active stage
         failed_plats = [p for p in active_platforms if state.failed_platforms.get(p)]
-        print(f"[repair] Active stage failed platforms requiring repair: {failed_plats}")
+        logger.info("Active stage failed platforms requiring repair: %s", failed_plats)
 
         # Gather errors only from failing platforms
         failed_errors = []
@@ -94,5 +134,5 @@ async def repair_node(state: GraphState) -> GraphState:
         })
 
     except Exception as e:
-        print(f"[repair] CRITICAL ERROR: {e}")
+        logger.error("CRITICAL ERROR in repair phase: %s", e)
         raise

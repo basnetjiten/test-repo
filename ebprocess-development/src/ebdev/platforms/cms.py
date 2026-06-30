@@ -1,27 +1,74 @@
 # -*- coding: utf-8 -*-
-"""Concrete execution strategy for CMS platforms."""
+"""
+cms.py
+======
+Concrete execution strategy for CMS platforms.
+
+Responsibilities
+----------------
+* Placeholder handling for linter, dependency, and test actions on CMS platforms.
+"""
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from ebdev.platforms.base import PlatformStrategy
-from ebdev.core.logger import get_logger
 
-logger = get_logger(__name__)
+# ---------------------------------------------------------------------------
+# Module-level logger
+# ---------------------------------------------------------------------------
+logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# CMS Platform Strategy
+# ---------------------------------------------------------------------------
 class CmsStrategy(PlatformStrategy):
-    """Placeholder strategy handling linter, dependency and test actions for CMS platforms."""
+    """Placeholder strategy handling linter, dependency, and test actions for CMS platforms."""
 
     async def prepare(self, repo_path: Path, branch_name: str) -> None:
-        logger.info(f"Preparing CMS workspace at {repo_path} (No-Op placeholder)")
+        """
+        Resolve CMS dependencies (placeholder).
+
+        Parameters
+        ----------
+        repo_path : Path
+            The repository path to prepare.
+        branch_name : str
+            The name of the branch.
+        """
+        logger.info("Preparing CMS workspace at %s (No-Op placeholder)", repo_path)
         pass
 
     async def validate(self, repo_path: Path) -> list[str]:
-        logger.info(f"Validating CMS workspace at {repo_path} (No-Op placeholder)")
+        """
+        Validate CMS workspace layout and linting (placeholder).
+
+        Parameters
+        ----------
+        repo_path : Path
+            The repository path to validate.
+
+        Returns
+        -------
+        list[str]
+            A list of validation error messages. Empty for this placeholder.
+        """
+        logger.info("Validating CMS workspace at %s (No-Op placeholder)", repo_path)
         return []
 
     async def bootstrap(self, repo_path: Path, starter_type: str) -> None:
-        logger.info(f"Bootstrapping CMS workspace at {repo_path} (No-Op placeholder)")
+        """
+        Bootstrap CMS files and directories (placeholder).
+
+        Parameters
+        ----------
+        repo_path : Path
+            The destination repository directory.
+        starter_type : str
+            The type of starter skeleton to bootstrap.
+        """
+        logger.info("Bootstrapping CMS workspace at %s (No-Op placeholder)", repo_path)
         pass

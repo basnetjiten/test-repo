@@ -1,20 +1,62 @@
 # -*- coding: utf-8 -*-
-"""Plan node - triggers multi-platform planning concurrently using OpenCode."""
+"""
+plan.py
+=======
+Plan node - triggers multi-platform planning concurrently using OpenCode.
+
+Responsibilities
+----------------
+* Identify active platforms for the current execution wave.
+* Invoke OpenCode planners concurrently to generate implementation plans.
+* Verify generated plan files (existence and minimum file size).
+* Consolidate planner results to update the graph state.
+"""
 
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ebdev.config import config
-from ebdev.models.schemas import GraphState, JobResult
-from ebdev.services.opencode import invoke_opencode
 from ebdev.core.nodes.common import send_progress
+from ebdev.core.spoq_utils import get_active_wave_tasks
+from ebdev.models.schemas import JobResult
+from ebdev.services.opencode import invoke_opencode
+
+if TYPE_CHECKING:
+    from ebdev.models.schemas import GraphState
+
+# ---------------------------------------------------------------------------
+# Module-level logger
+# ---------------------------------------------------------------------------
+logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Node Entry Point
+# ---------------------------------------------------------------------------
 async def plan_node(state: GraphState) -> GraphState:
-    """Invokes planners concurrently for all active stage platforms using asyncio.gather."""
+    """
+    Invoke planners concurrently for all active stage platforms using asyncio.gather.
+
+    Parameters
+    ----------
+    state : GraphState
+        The current state of the workflow graph.
+
+    Returns
+    -------
+    GraphState
+        The updated state with the consolidated planner results.
+
+    Raises
+    ------
+    ValueError
+        If the SPOQ epic task directory is missing when execution mode is SPOQ.
+    """
     state.last_node = "plan"
     await send_progress(state, f"Planning: Analyzing stage {state.current_stage + 1} architecture and requirements...")
     start_time = time.time()
@@ -25,7 +67,6 @@ async def plan_node(state: GraphState) -> GraphState:
     if is_spoq:
         if ctx.spoq_epic_dir is None:
             raise ValueError("spoq_epic_dir cannot be None when execution_mode is 'spoq'")
-        from ebdev.core.spoq_utils import get_active_wave_tasks
         tasks = get_active_wave_tasks(ctx.spoq_epic_dir)
         # Extract platforms from the skills_required of active tasks
         platforms = []
@@ -45,7 +86,7 @@ async def plan_node(state: GraphState) -> GraphState:
     
     # 1. Async Planning Worker Function
     async def plan_single_platform(platform: str) -> tuple[str, JobResult]:
-        print(f"[plan][{platform}] Running planner...")
+        logger.info("[%s] Running planner...", platform)
         
         if len(ctx.platforms) > 1:
             plat_path = repo_path / platform
@@ -89,7 +130,7 @@ async def plan_node(state: GraphState) -> GraphState:
                     "errors": (result.errors or []) + [f"Plan file {plan_file.name} is too small."]
                 })
             else:
-                print(f"[plan][{platform}] Verified plan file size: {plan_file.stat().st_size} bytes")
+                logger.info("[%s] Verified plan file size: %d bytes", platform, plan_file.stat().st_size)
                 
         return platform, result
 
@@ -99,7 +140,7 @@ async def plan_node(state: GraphState) -> GraphState:
         results = dict(platform_runs)
         
         duration = round(time.time() - start_time, 2)
-        print(f"[plan] Concurrence planners completed in {duration}s.")
+        logger.info("Concurrent planners completed in %ss.", duration)
 
         # Consolidate results: if any platform planner failed, the step fails
         overall_status = "success"
@@ -129,5 +170,5 @@ async def plan_node(state: GraphState) -> GraphState:
         })
 
     except Exception as e:
-        print(f"[plan] CRITICAL ERROR: {e}")
+        logger.error("CRITICAL ERROR in planning phase: %s", e)
         raise

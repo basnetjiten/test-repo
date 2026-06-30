@@ -10,10 +10,14 @@ dependencies = [
     "fastapi>=0.100.0",
     "uvicorn>=0.22.0",
     "python-dotenv>=1.0.0",
+    "pyyaml>=6.0.0",
+    "types-PyYAML>=6.0.0",
 ]
 
 [tool.pyright]
 extraPaths = ["src"]
+venvPath = "."
+venv = ".venv"
 
 [tool.pylint.main]
 source-roots = ["src"]

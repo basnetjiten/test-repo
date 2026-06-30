@@ -1,20 +1,68 @@
 # -*- coding: utf-8 -*-
-"""Publish node - commits, pushes, and creates pull requests concurrently for all platforms."""
+"""
+publish.py
+==========
+Publish node - commits, pushes, and creates pull requests concurrently for all platforms.
+
+Responsibilities
+----------------
+* Isolate and synchronize platform-specific git repositories.
+* Commit all outstanding changes and push branch to remote.
+* Call platform-specific repository APIs (Bitbucket/GitHub) to create pull requests.
+* Remove temporary implementation plan files.
+"""
 
 from __future__ import annotations
 
 import asyncio
-import httpx
+import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+import httpx
 
 from ebdev.config import config
-from ebdev.models.schemas import GraphState, JobResult
 from ebdev.core.nodes.common import send_progress
-from ebdev.services.git import GitService, GitConflictError
+from ebdev.models.schemas import JobResult
+from ebdev.services.git import GitConflictError, GitService
+
+if TYPE_CHECKING:
+    from ebdev.models.schemas import GraphState
+
+# ---------------------------------------------------------------------------
+# Module-level logger
+# ---------------------------------------------------------------------------
+logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+#: Bitbucket REST API v2 base path.
+BITBUCKET_API_BASE: str = "https://api.bitbucket.org/2.0"
+
+#: GitHub REST API v3 base path.
+GITHUB_API_BASE: str = "https://api.github.com"
+
+
+# ---------------------------------------------------------------------------
+# Node Entry Point
+# ---------------------------------------------------------------------------
 async def publish_node(state: GraphState) -> GraphState:
-    """Commit changes, push branches to remote, and open pull requests concurrently for all platforms."""
+    """
+    Commit changes, push branches to remote, and open pull requests concurrently.
+
+    Parameters
+    ----------
+    state : GraphState
+        The current state of the workflow graph.
+
+    Returns
+    -------
+    GraphState
+        The updated state containing PR URL details.
+    """
     state.last_node = "publish"
     await send_progress(state, "Publishing changes and creating Pull Requests concurrently...")
     
@@ -26,7 +74,7 @@ async def publish_node(state: GraphState) -> GraphState:
 
     # 1. Async Publishing Worker Function
     async def publish_single_platform(platform: str) -> str | None:
-        print(f"[publish][{platform}] Starting git actions...")
+        logger.info("[%s] Starting git actions...", platform)
         if len(platforms) > 1:
             plat_path = repo_path / platform
         else:
@@ -37,12 +85,12 @@ async def publish_node(state: GraphState) -> GraphState:
         if git.is_git_repo():
             try:
                 await asyncio.to_thread(git.sync_with_main, ctx.branch or "main")
-            except GitConflictError:
+            except GitConflictError as e:
                 await send_progress(state, f"Error: Conflict on platform {platform} during sync. Aborting.")
-                raise
+                raise e
 
             if not git.has_changes():
-                print(f"[publish][{platform}] No changes detected. Skipping git push.")
+                logger.info("[%s] No changes detected. Skipping git push.", platform)
             else:
                 commit_msg = f"feat: [{ctx.ticket.id}] {ctx.feature_name} ({platform})"
                 await asyncio.to_thread(git.commit_all, commit_msg)
@@ -92,7 +140,7 @@ async def publish_node(state: GraphState) -> GraphState:
                 plan_file = plans_dir / "plan.md"
             if plan_file.exists():
                 plan_file.unlink()
-                print(f"[publish] Cleanup: Removed plan {plan_file.name}")
+                logger.info("Cleanup: Removed plan %s", plan_file.name)
 
         return state.model_copy(update={
             "last_node": "publish",
@@ -100,13 +148,30 @@ async def publish_node(state: GraphState) -> GraphState:
             "pull_request_url": primary_pr
         })
 
-    except Exception as e:
-        print(f"[publish] CRITICAL ERROR: {e}")
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        logger.error("CRITICAL ERROR in publishing phase: %s", e)
         return state.model_copy(update={"last_node": "publish"})
 
 
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
 def _create_bitbucket_pr(ctx, branch_name: str) -> str | None:
-    """Invokes Bitbucket API to create a PR."""
+    """
+    Invoke Bitbucket API to create a PR.
+
+    Parameters
+    ----------
+    ctx : JobContext
+        The current execution context.
+    branch_name : str
+        The branch name to merge from.
+
+    Returns
+    -------
+    str | None
+        The HTML URL of the created PR, or None if creation failed or skipped.
+    """
     repo_url = ctx.project_repo or config.BITBUCKET_REPO_URL
     if not repo_url:
         return None
@@ -128,7 +193,7 @@ def _create_bitbucket_pr(ctx, branch_name: str) -> str | None:
     if not workspace or not slug:
         return None
 
-    api_url = f"https://api.bitbucket.org/2.0/repositories/{workspace}/{slug}/pullrequests"
+    api_url = f"{BITBUCKET_API_BASE}/repositories/{workspace}/{slug}/pullrequests"
     
     payload = {
         "title": f"PR for {ctx.ticket.id}: {ctx.feature_name}",
@@ -147,13 +212,27 @@ def _create_bitbucket_pr(ctx, branch_name: str) -> str | None:
                 return None
             response.raise_for_status()
             return response.json().get("links", {}).get("html", {}).get("href")
-    except Exception as e:
-        print(f"[publish] Failed to create Bitbucket PR: {e}")
+    except httpx.HTTPError as e:
+        logger.error("Failed to create Bitbucket PR: %s", e)
         return None
 
 
 def _create_github_pr(ctx, branch_name: str) -> str | None:
-    """Invokes GitHub API to create a PR."""
+    """
+    Invoke GitHub API to create a PR.
+
+    Parameters
+    ----------
+    ctx : JobContext
+        The current execution context.
+    branch_name : str
+        The branch name to merge from.
+
+    Returns
+    -------
+    str | None
+        The HTML URL of the created PR, or None if creation failed or skipped.
+    """
     repo_url = ctx.project_repo or config.GITHUB_REPO_URL if hasattr(config, "GITHUB_REPO_URL") else ctx.project_repo
     if not repo_url:
         return None
@@ -165,7 +244,7 @@ def _create_github_pr(ctx, branch_name: str) -> str | None:
     repo = url_parts[-1]
     owner = url_parts[-2]
     
-    api_url = f"https://api.github.com/repos/{owner}/{repo}/pulls"
+    api_url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/pulls"
     
     payload = {
         "title": f"feat: [{ctx.ticket.id}] {ctx.feature_name}",
@@ -184,10 +263,10 @@ def _create_github_pr(ctx, branch_name: str) -> str | None:
         with httpx.Client() as client:
             response = client.post(api_url, json=payload, headers=headers)
             if response.status_code == 422:
-                print("[publish] GitHub PR already exists.")
+                logger.info("GitHub PR already exists.")
                 return None
             response.raise_for_status()
             return response.json().get("html_url")
-    except Exception as e:
-        print(f"[publish] Failed to create GitHub PR: {e}")
+    except httpx.HTTPError as e:
+        logger.error("Failed to create GitHub PR: %s", e)
         return None

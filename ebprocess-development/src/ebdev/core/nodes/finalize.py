@@ -1,27 +1,63 @@
 # -*- coding: utf-8 -*-
-"""Finalize node - performs cleanup, records final status, and runs callbacks."""
+"""
+finalize.py
+===========
+Finalize node - performs cleanup, records final status, and runs callbacks.
+
+Responsibilities
+----------------
+* Consolidate final JobResult.
+* Persist status updates in database.
+* Notify execution callbacks via HTTP POST.
+"""
 
 from __future__ import annotations
 
+import logging
 import time
+from typing import TYPE_CHECKING
+
 import httpx
 
-from ebdev.models.schemas import GraphState, JobResult
+from ebdev.models.schemas import JobResult
 from ebdev.services import db
 
+if TYPE_CHECKING:
+    from ebdev.models.schemas import GraphState
 
+# ---------------------------------------------------------------------------
+# Module-level logger
+# ---------------------------------------------------------------------------
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Node Entry Point
+# ---------------------------------------------------------------------------
 async def finalize_node(state: GraphState) -> GraphState:
-    """Consolidate the final JobResult, persist status updates, and notify execution callbacks."""
+    """
+    Consolidate the final JobResult, persist status updates, and notify execution callbacks.
+
+    Parameters
+    ----------
+    state : GraphState
+        The current state of the workflow graph.
+
+    Returns
+    -------
+    GraphState
+        The updated state with the finalized job result and done flag set.
+    """
     state.last_node = "finalize"
     start_time = time.time()
     ctx = state.context
     callback_url = ctx.n8n_callback_url
-    
-    print(f"[finalize] Finishing job: {ctx.ticket_id}")
-    
+
+    logger.info("Finishing job: %s", ctx.ticket_id)
+
     status = "success" if not state.failed else "failed"
     summary = state.result.summary if state.result else "Job completed."
-    
+
     result = JobResult(
         job_id=ctx.ticket_id,
         space_name=ctx.space_name,
@@ -32,30 +68,30 @@ async def finalize_node(state: GraphState) -> GraphState:
         errors=[],
         pr_url=state.result.pr_url if state.result else (state.pull_request_url or None),
     )
-    
+
     # 1. Update fallback status
     try:
         await db.update_job_status(result)
-    except Exception as e:
-        print(f"[finalize] DB persistence failed: {e}")
+    except (OSError, ValueError) as e:
+        logger.error("DB persistence failed: %s", e)
 
     # 2. Callback webhook
     if not callback_url:
-        print(f"[finalize] No callback URL for job {ctx.ticket_id} - skipping callback.")
+        logger.info("No callback URL for job %s - skipping callback.", ctx.ticket_id)
     else:
-        print(f"[finalize] Posting result to callback URL: {callback_url}")
+        logger.info("Posting result to callback URL: %s", callback_url)
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 data = result.model_dump()
                 response = await client.post(callback_url, json=data)
                 response.raise_for_status()
-                print(f"[finalize] Callback successful: {response.status_code}")
-        except Exception as e:
-            print(f"[finalize] WARNING: callback failed: {e}")
+                logger.info("Callback successful: %d", response.status_code)
+        except httpx.HTTPError as e:
+            logger.warning("Callback failed: %s", e)
 
     duration = round(time.time() - start_time, 2)
-    print(f"[finalize] Done in {duration}s.")
-    print(f"[finalize] Job {ctx.ticket_id} finished with status: {status}.")
+    logger.info("Done in %ss.", duration)
+    logger.info("Job %s finished with status: %s.", ctx.ticket_id, status)
 
     return state.model_copy(update={
         "last_node": "finalize",

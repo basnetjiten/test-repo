@@ -1,19 +1,38 @@
 # -*- coding: utf-8 -*-
-"""Environment-based configuration management for ebprocess-development."""
+"""
+config.py
+=========
+Environment-based configuration management for ebprocess-development.
+
+Responsibilities
+----------------
+* Load configuration parameters from environment variables (with default values).
+* Expose a unified configuration singleton for all nodes and services.
+"""
 
 from __future__ import annotations
 
 import os
 from pathlib import Path
+
 from dotenv import find_dotenv, load_dotenv
 
+# ---------------------------------------------------------------------------
+# Load Dotenv Environment
+# ---------------------------------------------------------------------------
 load_dotenv(find_dotenv())
 
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
 PROJECT_ROOT: Path = Path(__file__).parent.parent.parent.resolve()
 
 
+# ---------------------------------------------------------------------------
+# Config Registry
+# ---------------------------------------------------------------------------
 class Config:
-    """Project configuration loaded from environment variables."""
+    """Project configuration registry loaded from environment variables."""
 
     POSTGRES_URL: str = os.environ.get("POSTGRES_URL", "")
 
@@ -65,4 +84,5 @@ class Config:
     )
 
 
+# Unified config singleton instance
 config = Config()

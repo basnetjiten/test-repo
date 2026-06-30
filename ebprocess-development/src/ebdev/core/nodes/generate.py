@@ -1,21 +1,63 @@
 # -*- coding: utf-8 -*-
-"""Generate node - triggers builders concurrently using OpenCode."""
+"""
+generate.py
+===========
+Generate node - triggers builders concurrently using OpenCode.
+
+Responsibilities
+----------------
+* Identify active platforms for the current execution wave.
+* Verify planning stage outputs exist and are valid.
+* Concurrently invoke OpenCode builder agents for each platform.
+* Store and resume OpenCode conversation session IDs for task continuity.
+* Consolidate build results to update the graph state.
+"""
 
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ebdev.config import config
-from ebdev.models.schemas import GraphState, JobResult
-from ebdev.services.opencode import invoke_opencode
-from ebdev.services import db
 from ebdev.core.nodes.common import send_progress
+from ebdev.models.schemas import JobResult
+from ebdev.services import db
+from ebdev.services.opencode import invoke_opencode
+
+if TYPE_CHECKING:
+    from ebdev.models.schemas import GraphState
+
+# ---------------------------------------------------------------------------
+# Module-level logger
+# ---------------------------------------------------------------------------
+logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Node Entry Point
+# ---------------------------------------------------------------------------
 async def generate_node(state: GraphState) -> GraphState:
-    """Invokes builder agents concurrently for active stage platforms using asyncio.gather."""
+    """
+    Invoke builder agents concurrently for active stage platforms using asyncio.gather.
+
+    Parameters
+    ----------
+    state : GraphState
+        The current state of the workflow graph.
+
+    Returns
+    -------
+    GraphState
+        The updated state with the consolidated builder results.
+
+    Raises
+    ------
+    ValueError
+        If the SPOQ epic task directory is missing when execution mode is SPOQ.
+    """
     state.last_node = "generate"
     await send_progress(state, f"Coding: Generating stage {state.current_stage + 1} code implementations concurrently...")
     start_time = time.time()
@@ -38,7 +80,7 @@ async def generate_node(state: GraphState) -> GraphState:
     
     # If the previous planning step failed, skip code generation
     if state.result and state.result.status == "failed":
-        print("[generate] Skipping due to plan failure.")
+        logger.info("Skipping due to plan failure.")
         return state.model_copy(update={"last_node": "generate"})
 
     plans_dir = Path(config.OPENCODE_PROJECT_DIR) / "plans"
@@ -47,11 +89,11 @@ async def generate_node(state: GraphState) -> GraphState:
 
     # 1. Async Generation Worker Function
     async def generate_single_platform(platform: str) -> tuple[str, JobResult, str | None]:
-        print(f"[generate][{platform}] Running builder...")
+        logger.info("[%s] Running builder...", platform)
         
         # Check if platform is already done and successfully validated in previous stages/iterations
         if state.done_platforms.get(platform) is True:
-            print(f"[generate][{platform}] Skipping because platform already successfully validated.")
+            logger.info("[%s] Skipping because platform already successfully validated.", platform)
             existing_result = state.platform_results.get(platform) or JobResult(
                 job_id=ctx.ticket_id,
                 space_name=ctx.space_name,
@@ -107,7 +149,7 @@ async def generate_node(state: GraphState) -> GraphState:
                 if not existing_session_id:
                     existing_session_id = await db.get_session_id_by_jira_id(linked_session_key)
                 if existing_session_id:
-                    print(f"[generate][{platform}] Resuming session {existing_session_id!r} from linked ticket {linked_id}")
+                    logger.info("[%s] Resuming session %r from linked ticket %s", platform, existing_session_id, linked_id)
                     break
 
         if not existing_session_id:
@@ -116,7 +158,7 @@ async def generate_node(state: GraphState) -> GraphState:
                 existing_session_id = await db.get_session_id_by_jira_id(f"{ticket_id}_{platform}")
         
         if existing_session_id:
-            print(f"[generate][{platform}] Resuming OpenCode session: {existing_session_id}")
+            logger.info("[%s] Resuming OpenCode session: %s", platform, existing_session_id)
 
         # Progress callback loop
         loop = asyncio.get_running_loop()
@@ -148,7 +190,7 @@ async def generate_node(state: GraphState) -> GraphState:
                 session_ids[p] = sid
 
         duration = round(time.time() - start_time, 2)
-        print(f"[generate] Concurrence builders finished in {duration}s.")
+        logger.info("Concurrent builders finished in %ss.", duration)
 
         # Consolidate results
         overall_status = "success"
@@ -180,5 +222,5 @@ async def generate_node(state: GraphState) -> GraphState:
         })
 
     except Exception as e:
-        print(f"[generate] CRITICAL ERROR: {e}")
+        logger.error("CRITICAL ERROR in generation phase: %s", e)
         raise

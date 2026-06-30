@@ -1,22 +1,66 @@
 # -*- coding: utf-8 -*-
-"""Orchestrate node - runs LLM architect evaluation to decide execution topology."""
+"""
+orchestrate.py
+==============
+Orchestrate node - runs LLM architect evaluation to decide execution topology.
+
+Responsibilities
+----------------
+* Analyze the ticket and active platforms to dynamically compile the OrchestrationStrategy.
+* Fall back to a rule-based classifier if LLM Architect fails or is unconfigured.
+* Generate a wave-based DAG (SPOQ task queue) for multi-platform tasks.
+"""
 
 from __future__ import annotations
 
 import json
+import logging
 import re
-import yaml
 from pathlib import Path
-from pydantic import ValidationError
+from typing import TYPE_CHECKING
+
+import yaml
 
 from ebdev.config import config
-from ebdev.models.schemas import GraphState, OrchestrationStrategy, JobResult, SPOQTask
 from ebdev.core.nodes.common import send_progress
+from ebdev.models.schemas import OrchestrationStrategy, SPOQTask
 from ebdev.services.opencode import OpenCodeAPIClient
+from ebdev.services.prompts import build_orchestrator_prompt
+
+if TYPE_CHECKING:
+    from ebdev.models.schemas import GraphState
+
+# ---------------------------------------------------------------------------
+# Module-level logger
+# ---------------------------------------------------------------------------
+logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+#: Fallback OpenCode server URL if not configured in environmental settings.
+DEFAULT_OPENCODE_SERVER_URL: str = "http://opencode:4096"
+
+
+# ---------------------------------------------------------------------------
+# Node Entry Point
+# ---------------------------------------------------------------------------
 async def orchestrate_node(state: GraphState) -> GraphState:
-    """Analyze the ticket and active platforms to dynamically compile the OrchestrationStrategy."""
+    """
+    Analyze the ticket and active platforms to dynamically compile the OrchestrationStrategy.
+
+    Parameters
+    ----------
+    state : GraphState
+        The current state of the workflow graph.
+
+    Returns
+    -------
+    GraphState
+        The updated state with the orchestration strategy and, if applicable, the SPOQ epic task directory.
+    """
     state.last_node = "orchestrate"
     await send_progress(state, "Orchestrating: Analyzing ticket scope, dependencies, and complexity...")
     
@@ -69,40 +113,14 @@ async def orchestrate_node(state: GraphState) -> GraphState:
     strategy = fallback_strategy
     if config.OPENCODE_API_KEY or config.OPENCODE_SERVER_URL:
         try:
-            prompt = f"""You are the Head Technical Architect for an autonomous multi-platform project.
-Analyze this ticket and decide the best execution strategy for the platforms: {platforms}.
-
-Ticket Details:
-- ID: {ticket_id}
-- Title: {ticket_title}
-- Description: {ticket_desc}
-- Acceptance Criteria: {ticket_ac}
-
-Determine:
-1. Complexity ("low", "medium", or "high").
-2. Whether it requires an offline-first strategy (local-first storage/sync).
-3. Whether it is a UI/UX-only presentation modification with no backend or database alterations.
-4. Execution mode:
-   - "spoq": Use Wave-Based Topological Dispatch (generate API contracts first, mock frontends in parallel, then integrate). Use this for any epic combining API and frontends.
-   - "parallel": Run all platforms concurrently (for low complexity, UI-only, or independent changes).
-   - "sequential": Run platforms strictly one after another.
-5. Mocking level for frontends: "live" (connect directly) or "mock_repositories" (mock network/client implementations based on OpenAPI specs).
-6. Reasoning: Explain the rationale.
-
-You MUST return your decision in this exact JSON structure:
-```json
-{{
-  "complexity": "low" | "medium" | "high",
-  "offline_first": true | false,
-  "ui_ux_only": true | false,
-  "execution_mode": "spoq" | "parallel" | "sequential",
-  "mocking_level": "live" | "mock_repositories" | "ui_stubs",
-  "max_repair_iterations": 3,
-  "reasoning": "rationale here"
-}}
-```
-"""
-            server_url = config.OPENCODE_SERVER_URL or "http://opencode:4096"
+            prompt = build_orchestrator_prompt(
+                platforms=platforms,
+                ticket_id=ticket_id,
+                ticket_title=ticket_title,
+                ticket_desc=ticket_desc,
+                ticket_ac=ticket_ac
+            )
+            server_url = config.OPENCODE_SERVER_URL or DEFAULT_OPENCODE_SERVER_URL
             client = OpenCodeAPIClient(base_url=server_url, api_key=config.OPENCODE_API_KEY)
             
             session_id = await client.create_session(title=f"Architect-{ticket_id}")
@@ -121,22 +139,23 @@ You MUST return your decision in this exact JSON structure:
             if json_match:
                 data = json.loads(json_match.group(1))
                 strategy = OrchestrationStrategy(**data)
-                print(f"[orchestrate] LLM architect strategy selected: {strategy.execution_mode} ({strategy.complexity} complexity)")
+                logger.info("LLM architect strategy selected: %s (%s complexity)", strategy.execution_mode, strategy.complexity)
         except Exception as e:
-            print(f"[orchestrate] Warning: LLM architect failed, using rule-based fallback: {e}")
+            logger.warning("LLM architect failed, using rule-based fallback: %s", e)
 
     # Log the strategy decision
-    print(f"\n=== ORCHESTRATION STRATEGY SELECTED ===")
-    print(f"Complexity:    {strategy.complexity}")
-    print(f"Offline First: {strategy.offline_first}")
-    print(f"UI/UX Only:    {strategy.ui_ux_only}")
-    print(f"Execution:     {strategy.execution_mode}")
-    print(f"Mock Level:    {strategy.mocking_level}")
-    print(f"Reasoning:     {strategy.reasoning}\n")
+    logger.info("=== ORCHESTRATION STRATEGY SELECTED ===")
+    logger.info("Complexity:    %s", strategy.complexity)
+    logger.info("Offline First: %s", strategy.offline_first)
+    logger.info("UI/UX Only:    %s", strategy.ui_ux_only)
+    logger.info("Execution:     %s", strategy.execution_mode)
+    logger.info("Mock Level:    %s", strategy.mocking_level)
+    logger.info("Reasoning:     %s", strategy.reasoning)
 
     # Generate SPOQ Task Queue
     spoq_epic_dir = None
     if strategy.execution_mode == "spoq":
+        # Resolve repo path using pathlib
         repo_path = Path(ctx.repo_path).resolve()
         epic_dir = repo_path / "spoq" / "epics" / "active" / ticket_id
         tasks_dir = epic_dir / "tasks"
@@ -195,11 +214,11 @@ You MUST return your decision in this exact JSON structure:
         # Write YAMLs
         for t in tasks_to_write:
             yml_path = tasks_dir / f"{t.id}.yml"
-            with open(yml_path, 'w') as f:
+            with open(yml_path, 'w', encoding="utf-8") as f:
                 yaml.dump(t.model_dump(mode="json"), f, default_flow_style=False, sort_keys=False)
                 
         spoq_epic_dir = str(epic_dir)
-        print(f"[orchestrate] Generated SPOQ execution queue in {spoq_epic_dir}")
+        logger.info("Generated SPOQ execution queue in %s", spoq_epic_dir)
 
     updated_ctx = ctx.model_copy(update={
         "mocking_level": strategy.mocking_level,

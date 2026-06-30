@@ -129,6 +129,7 @@ class OrchestrationStrategy(BaseModel):
     mocking_level: str = "live"  # "live" | "mock_repositories" | "ui_stubs"
     max_repair_iterations: int = 3
     reasoning: str = ""
+    stages: Optional[List[List[str]]] = None
 
 
 class SPOQTask(BaseModel):

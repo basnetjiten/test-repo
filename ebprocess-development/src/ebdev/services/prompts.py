@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ebdev.core.constants import Agents, Prompts, ErrorMessages
+from ebdev.core.constants import Prompts, ErrorMessages
 from ebdev.models.schemas import JobContext
 
 
@@ -68,7 +68,6 @@ EXAMPLE:
 
     # Builder / Implementer instructions
     else:
-        repo_path = Path(job_context.repo_path)
         
         mock_req = ""
         if job_context.mocking_level == "mock_repositories":
@@ -104,6 +103,7 @@ def build_prompt(
 ) -> str:
     """Return the full hydrated prompt instructions for the active agent."""
     repo_dir = Path(job_context.repo_path).absolute()
+    session_line = f"\n- SESSION_ID  = {session_id}" if session_id else ""
 
     return f"""<{Prompts.ROLE_TAG}>
 Execute your role as the {job_context.current_agent} for job {job_context.ticket_id}.
@@ -111,7 +111,7 @@ Execute your role as the {job_context.current_agent} for job {job_context.ticket
 
 <{Prompts.ENV_TAG}>
 - STORAGE_DIR = {storage_dir}
-- REPO_DIR    = {repo_dir}
+- REPO_DIR    = {repo_dir}{session_line}
 </{Prompts.ENV_TAG}>
 
 <{Prompts.PATHS_TAG}>
@@ -136,3 +136,66 @@ ZERO-QUESTION POLICY:
 - After all work is complete, you MUST output a final status report as a JSON object wrapped in a ```json code block.
 - Wait for all tool commands to succeed before concluding your work.
 </{Prompts.FINAL_INSTRUCTION_TAG}>"""
+
+
+def build_orchestrator_prompt(
+    platforms: list[str],
+    ticket_id: str,
+    ticket_title: str,
+    ticket_desc: str,
+    ticket_ac: str,
+) -> str:
+    """
+    Return the prompt for the Orchestrator LLM.
+
+    Parameters
+    ----------
+    platforms : list[str]
+        The list of target platforms.
+    ticket_id : str
+        The unique ID of the ticket.
+    ticket_title : str
+        The title of the ticket.
+    ticket_desc : str
+        The detailed description of the ticket.
+    ticket_ac : str
+        The acceptance criteria for the ticket.
+
+    Returns
+    -------
+    str
+        The formatted orchestrator prompt.
+    """
+    return f"""You are the Head Technical Architect for an autonomous multi-platform project.
+Analyze this ticket and decide the best execution strategy for the platforms: {platforms}.
+
+Ticket Details:
+- ID: {ticket_id}
+- Title: {ticket_title}
+- Description: {ticket_desc}
+- Acceptance Criteria: {ticket_ac}
+
+Determine:
+1. Complexity ("low", "medium", or "high").
+2. Whether it requires an offline-first strategy (local-first storage/sync).
+3. Whether it is a UI/UX-only presentation modification with no backend or database alterations.
+4. Execution mode:
+   - "spoq": Use Wave-Based Topological Dispatch (generate API contracts first, mock frontends in parallel, then integrate). Use this for any epic combining API and frontends.
+   - "parallel": Run all platforms concurrently (for low complexity, UI-only, or independent changes).
+   - "sequential": Run platforms strictly one after another.
+5. Mocking level for frontends: "live" (connect directly) or "mock_repositories" (mock network/client implementations based on OpenAPI specs).
+6. Reasoning: Explain the rationale.
+
+You MUST return your decision in this exact JSON structure:
+```json
+{{
+  "complexity": "low" | "medium" | "high",
+  "offline_first": true | false,
+  "ui_ux_only": true | false,
+  "execution_mode": "spoq" | "parallel" | "sequential",
+  "mocking_level": "live" | "mock_repositories" | "ui_stubs",
+  "max_repair_iterations": 3,
+  "reasoning": "rationale here"
+}}
+```
+"""
