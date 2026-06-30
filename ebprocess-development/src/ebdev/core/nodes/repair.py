@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 import time
 from ebdev.config import config
 from ebdev.models.schemas import GraphState, JobResult
@@ -18,7 +19,20 @@ async def repair_node(state: GraphState) -> GraphState:
     await send_progress(state, msg)
     start_time = time.time()
     ctx = state.context
-    active_platforms = state.strategy.stages[state.current_stage] if (state.strategy and state.strategy.stages) else ctx.platforms
+    
+    is_spoq = state.is_spoq
+    if is_spoq:
+        if ctx.spoq_epic_dir is None:
+            raise ValueError("spoq_epic_dir cannot be None when execution_mode is 'spoq'")
+        from ebdev.core.spoq_utils import get_active_wave_tasks
+        tasks = get_active_wave_tasks(ctx.spoq_epic_dir)
+        active_platforms = []
+        for t in tasks:
+            active_platforms.extend(t.get("skills_required", []))
+        active_platforms = list(dict.fromkeys(active_platforms))
+    else:
+        active_platforms = state.strategy.stages[state.current_stage] if (state.strategy and state.strategy.stages) else ctx.platforms
+    repo_path = Path(ctx.repo_path)
     
     try:
         # Determine which platforms failed in the active stage

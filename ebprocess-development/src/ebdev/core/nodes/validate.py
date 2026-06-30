@@ -16,7 +16,20 @@ async def validate_node(state: GraphState) -> GraphState:
     """Run code verification (linters/tests) concurrently for all active stage platforms."""
     state.last_node = "validate"
     ctx = state.context
-    active_platforms = state.strategy.stages[state.current_stage] if (state.strategy and state.strategy.stages) else ctx.platforms
+    
+    active_tasks = []
+    is_spoq = state.is_spoq
+    if is_spoq:
+        if ctx.spoq_epic_dir is None:
+            raise ValueError("spoq_epic_dir cannot be None when execution_mode is 'spoq'")
+        from ebdev.core.spoq_utils import get_active_wave_tasks
+        active_tasks = get_active_wave_tasks(ctx.spoq_epic_dir)
+        platforms = []
+        for t in active_tasks:
+            platforms.extend(t.get("skills_required", []))
+        platforms = list(dict.fromkeys(platforms))
+    else:
+        platforms = ctx.platforms
     repo_path = Path(ctx.repo_path)
     
     await send_progress(state, f"Validating: Running stage {state.current_stage + 1} linter and test validation concurrently...")
@@ -42,7 +55,7 @@ async def validate_node(state: GraphState) -> GraphState:
 
     try:
         # Run active platform validation checks concurrently
-        runs = await asyncio.gather(*[validate_single_platform(p) for p in active_platforms])
+        runs = await asyncio.gather(*[validate_single_platform(p) for p in platforms])
         platform_errors = dict(runs)
         
         duration = round(time.time() - start_time, 2)
@@ -69,7 +82,8 @@ async def validate_node(state: GraphState) -> GraphState:
         # Determine if we should proceed to the next stage or finish
         next_stage = state.current_stage
         stages_finished = True
-        if all_passed and state.strategy and state.strategy.stages:
+        
+        if all_passed and not is_spoq and state.strategy and hasattr(state.strategy, 'stages'):
             if state.current_stage < len(state.strategy.stages) - 1:
                 next_stage = state.current_stage + 1
                 stages_finished = False
@@ -81,6 +95,14 @@ async def validate_node(state: GraphState) -> GraphState:
 
         # Update context validation errors
         updated_ctx = ctx.model_copy(update={"validation_errors": combined_errors})
+
+        # Check if validation passed for all platforms
+        if all_passed and is_spoq:
+            # Mark active SPOQ tasks as completed!
+            from ebdev.core.spoq_utils import update_spoq_task_status
+            for t in active_tasks:
+                update_spoq_task_status(ctx.spoq_epic_dir, t["id"], "completed")
+            print("[validate] Marked SPOQ tasks as completed for the current wave.")
 
         return state.model_copy(update={
             "context": updated_ctx,

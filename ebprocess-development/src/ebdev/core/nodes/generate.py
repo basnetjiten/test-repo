@@ -21,7 +21,19 @@ async def generate_node(state: GraphState) -> GraphState:
     start_time = time.time()
     
     ctx = state.context
-    platforms = state.strategy.stages[state.current_stage] if (state.strategy and state.strategy.stages) else ctx.platforms
+    
+    is_spoq = state.is_spoq
+    if is_spoq:
+        if ctx.spoq_epic_dir is None:
+            raise ValueError("spoq_epic_dir cannot be None when execution_mode is 'spoq'")
+        from ebdev.core.spoq_utils import get_active_wave_tasks
+        tasks = get_active_wave_tasks(ctx.spoq_epic_dir)
+        platforms = []
+        for t in tasks:
+            platforms.extend(t.get("skills_required", []))
+        platforms = list(dict.fromkeys(platforms))
+    else:
+        platforms = ctx.platforms
     repo_path = Path(ctx.repo_path)
     
     # If the previous planning step failed, skip code generation

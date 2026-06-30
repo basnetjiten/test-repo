@@ -17,6 +17,7 @@ from ebdev.core.nodes import (
     publish_node,
     finalize_node,
 )
+from ebdev.core.spoq_utils import get_active_wave_tasks, get_spoq_tasks
 
 
 # ── Routing Logic ────────────────────────────────────────────────────────────
@@ -36,17 +37,37 @@ def _route_after_generate(state: GraphState) -> str:
 
 def _route_after_validate(state: GraphState) -> str:
     """Route to next planning stage on success, repair on failure, or contract when finished."""
-    active_platforms = state.strategy.stages[state.current_stage] if (state.strategy and state.strategy.stages) else state.context.platforms
-    has_failures = any(state.failed_platforms.get(p) for p in active_platforms)
+    is_spoq = state.is_spoq
     
-    if has_failures:
-        return "repair"
+    if is_spoq:
+        has_failures = state.failed
+        if has_failures:
+            return "repair"
+            
+        if state.context.spoq_epic_dir is None:
+            raise ValueError("spoq_epic_dir cannot be None when execution_mode is 'spoq'")
+            
+        # Check if there are any pending tasks left
+        all_tasks = get_spoq_tasks(state.context.spoq_epic_dir)
+        remaining = [t for t in all_tasks if t["status"] in ["pending", "blocked"]]
         
-    if state.done:
-        return "contract"
+        if remaining:
+            return "plan"
+            
+        return "publish"
         
-    # No failures in the current stage, but not all stages completed -> loop back to plan next stage
-    return "plan"
+    else:
+        # Backward compatibility for parallel/sequential without spoq
+        active_platforms = state.context.platforms
+        has_failures = any(state.failed_platforms.get(p) for p in active_platforms)
+        
+        if has_failures:
+            return "repair"
+            
+        if state.done:
+            return "contract"
+            
+        return "plan"
 
 
 def _route_after_contract(state: GraphState) -> str:
@@ -96,6 +117,7 @@ def build_graph() -> StateGraph:
 
     builder.add_conditional_edges("validate", _route_after_validate, {
         "contract": "contract",
+        "publish": "publish",
         "repair": "repair",
         "plan": "plan",
     })

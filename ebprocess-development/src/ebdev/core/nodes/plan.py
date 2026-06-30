@@ -20,7 +20,22 @@ async def plan_node(state: GraphState) -> GraphState:
     start_time = time.time()
     
     ctx = state.context
-    platforms = state.strategy.stages[state.current_stage] if (state.strategy and state.strategy.stages) else ctx.platforms
+    
+    is_spoq = state.is_spoq
+    if is_spoq:
+        if ctx.spoq_epic_dir is None:
+            raise ValueError("spoq_epic_dir cannot be None when execution_mode is 'spoq'")
+        from ebdev.core.spoq_utils import get_active_wave_tasks
+        tasks = get_active_wave_tasks(ctx.spoq_epic_dir)
+        # Extract platforms from the skills_required of active tasks
+        platforms = []
+        for t in tasks:
+            platforms.extend(t.get("skills_required", []))
+        # Remove duplicates while preserving order
+        platforms = list(dict.fromkeys(platforms))
+    else:
+        # Fallback to standard platform list
+        platforms = ctx.platforms
     repo_path = Path(ctx.repo_path)
     
     plans_dir = Path(config.OPENCODE_PROJECT_DIR) / "plans"

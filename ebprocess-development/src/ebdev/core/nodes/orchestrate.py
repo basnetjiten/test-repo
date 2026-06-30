@@ -5,11 +5,12 @@ from __future__ import annotations
 
 import json
 import re
+import yaml
 from pathlib import Path
 from pydantic import ValidationError
 
 from ebdev.config import config
-from ebdev.models.schemas import GraphState, OrchestrationStrategy, JobResult
+from ebdev.models.schemas import GraphState, OrchestrationStrategy, JobResult, SPOQTask
 from ebdev.core.nodes.common import send_progress
 from ebdev.services.opencode import OpenCodeAPIClient
 
@@ -48,12 +49,10 @@ async def orchestrate_node(state: GraphState) -> GraphState:
     other_platforms = [p for p in platforms if p != "api"]
     
     if has_api and len(platforms) > 1 and not ui_ux_only_detected:
-        default_mode = "mock_first" if not offline_first_detected else "sequential"
-        default_stages = [["api"], other_platforms]
+        default_mode = "spoq"
         default_mocking = "mock_repositories" if not offline_first_detected else "live"
     else:
         default_mode = "parallel"
-        default_stages = [platforms]
         default_mocking = "live"
         
     fallback_strategy = OrchestrationStrategy(
@@ -61,7 +60,6 @@ async def orchestrate_node(state: GraphState) -> GraphState:
         offline_first=offline_first_detected,
         ui_ux_only=ui_ux_only_detected,
         execution_mode=default_mode,
-        stages=default_stages,
         mocking_level=default_mocking,
         max_repair_iterations=3,
         reasoning="Rule-based fallback evaluation based on ticket requirements and platform scope."
@@ -85,12 +83,11 @@ Determine:
 2. Whether it requires an offline-first strategy (local-first storage/sync).
 3. Whether it is a UI/UX-only presentation modification with no backend or database alterations.
 4. Execution mode:
-   - "parallel": Run all platforms concurrently (for low complexity, UI-only, or simple API adds).
-   - "sequential": Run platforms in stages (e.g. API database migrations first, then frontend).
-   - "mock_first": Run API first, frontend consumes mock repositories/clients based on API schemas to build UI/UX immediately.
-5. Execution stages: A list of lists representing platform stages (e.g. [["api"], ["flutter", "web"]]).
-6. Mocking level for frontends: "live" (connect directly) or "mock_repositories" (mock network/client implementations).
-7. Reasoning: Explain the rationale.
+   - "spoq": Use Wave-Based Topological Dispatch (generate API contracts first, mock frontends in parallel, then integrate). Use this for any epic combining API and frontends.
+   - "parallel": Run all platforms concurrently (for low complexity, UI-only, or independent changes).
+   - "sequential": Run platforms strictly one after another.
+5. Mocking level for frontends: "live" (connect directly) or "mock_repositories" (mock network/client implementations based on OpenAPI specs).
+6. Reasoning: Explain the rationale.
 
 You MUST return your decision in this exact JSON structure:
 ```json
@@ -98,8 +95,7 @@ You MUST return your decision in this exact JSON structure:
   "complexity": "low" | "medium" | "high",
   "offline_first": true | false,
   "ui_ux_only": true | false,
-  "execution_mode": "parallel" | "sequential" | "mock_first",
-  "stages": [["stage_1_platform"], ["stage_2_platform"]],
+  "execution_mode": "spoq" | "parallel" | "sequential",
   "mocking_level": "live" | "mock_repositories" | "ui_stubs",
   "max_repair_iterations": 3,
   "reasoning": "rationale here"
@@ -135,13 +131,80 @@ You MUST return your decision in this exact JSON structure:
     print(f"Offline First: {strategy.offline_first}")
     print(f"UI/UX Only:    {strategy.ui_ux_only}")
     print(f"Execution:     {strategy.execution_mode}")
-    print(f"Stages:        {strategy.stages}")
     print(f"Mock Level:    {strategy.mocking_level}")
     print(f"Reasoning:     {strategy.reasoning}\n")
 
+    # Generate SPOQ Task Queue
+    spoq_epic_dir = None
+    if strategy.execution_mode == "spoq":
+        repo_path = Path(ctx.repo_path).resolve()
+        epic_dir = repo_path / "spoq" / "epics" / "active" / ticket_id
+        tasks_dir = epic_dir / "tasks"
+        tasks_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Write EPIC.md
+        epic_md = f"# Epic: {ticket_title}\n\n{ticket_desc}\n\n## Acceptance Criteria\n{ticket_ac}\n"
+        (epic_dir / "EPIC.md").write_text(epic_md, encoding="utf-8")
+        
+        # Build DAG
+        tasks_to_write = []
+        
+        # Phase 0: Contract
+        contract_task = SPOQTask(
+            id="00-contract",
+            title="Define OpenAPI and Data Models",
+            epic=ticket_id,
+            status="pending",
+            phase=0,
+            dependencies=[],
+            skills_required=["api"] if "api" in platforms else platforms[:1],
+            outputs=["OpenAPI YAML", "Database schema models"]
+        )
+        tasks_to_write.append(contract_task)
+        
+        # Phase 1: Parallel Implementation
+        impl_tasks = []
+        for plat in platforms:
+            task_id = f"01-{plat}-impl"
+            impl_task = SPOQTask(
+                id=task_id,
+                title=f"Implement {plat.capitalize()} features",
+                epic=ticket_id,
+                status="blocked",
+                phase=1,
+                dependencies=["00-contract"],
+                skills_required=[plat],
+                outputs=[f"{plat.capitalize()} specific implementation"]
+            )
+            tasks_to_write.append(impl_task)
+            impl_tasks.append(task_id)
+            
+        # Phase 2: Integration
+        integration_task = SPOQTask(
+            id="02-integration",
+            title="Integrate and verify all platforms",
+            epic=ticket_id,
+            status="blocked",
+            phase=2,
+            dependencies=impl_tasks,
+            skills_required=platforms,
+            outputs=["Verified integration tests passing"]
+        )
+        tasks_to_write.append(integration_task)
+        
+        # Write YAMLs
+        for t in tasks_to_write:
+            yml_path = tasks_dir / f"{t.id}.yml"
+            with open(yml_path, 'w') as f:
+                yaml.dump(t.model_dump(mode="json"), f, default_flow_style=False, sort_keys=False)
+                
+        spoq_epic_dir = str(epic_dir)
+        print(f"[orchestrate] Generated SPOQ execution queue in {spoq_epic_dir}")
+
     updated_ctx = ctx.model_copy(update={
         "mocking_level": strategy.mocking_level,
-        "offline_first": strategy.offline_first
+        "offline_first": strategy.offline_first,
+        "spoq_epic_dir": spoq_epic_dir
     })
 
     return state.model_copy(update={

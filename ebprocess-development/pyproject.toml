@@ -11,3 +11,10 @@ dependencies = [
     "uvicorn>=0.22.0",
     "python-dotenv>=1.0.0",
 ]
+
+[tool.pyright]
+extraPaths = ["src"]
+
+[tool.pylint.main]
+source-roots = ["src"]
+init-hook='import sys, os; sys.path.insert(0, os.path.abspath("src"))'

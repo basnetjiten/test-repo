@@ -40,6 +40,9 @@ class JobContext(BaseModel):
     mocking_level: str = "live"
     offline_first: bool = False
 
+    # SPOQ State properties
+    spoq_epic_dir: Optional[str] = None
+    
     # Progress tracking properties
     repair_iteration: int = Field(0, exclude=True)
     generated_branch: Optional[str] = Field(None, exclude=True)
@@ -122,11 +125,25 @@ class OrchestrationStrategy(BaseModel):
     complexity: str  # "low" | "medium" | "high"
     offline_first: bool = False
     ui_ux_only: bool = False
-    execution_mode: str  # "parallel" | "sequential" | "mock_first"
-    stages: List[List[str]] = Field(default_factory=list)
+    execution_mode: str  # "spoq" | "parallel" | "sequential"
     mocking_level: str = "live"  # "live" | "mock_repositories" | "ui_stubs"
     max_repair_iterations: int = 3
     reasoning: str = ""
+
+
+class SPOQTask(BaseModel):
+    """Schema for a SPOQ task YAML definition."""
+    id: str
+    title: str
+    epic: str
+    status: str = "pending"  # pending | in_progress | completed | blocked
+    phase: int = 0
+    dependencies: List[str] = Field(default_factory=list)
+    skills_required: List[str] = Field(default_factory=list)
+    files_to_touch: List[str] = Field(default_factory=list)
+    outputs: List[str] = Field(default_factory=list)
+    acceptance_criteria: List[str] = Field(default_factory=list)
+    description: str = ""
 
 
 class GraphState(BaseModel):
@@ -155,3 +172,7 @@ class GraphState(BaseModel):
     failed_platforms: Dict[str, bool] = Field(default_factory=dict)
     opencode_session_ids: Dict[str, str] = Field(default_factory=dict)
 
+    @property
+    def is_spoq(self) -> bool:
+        """Helper to quickly check if current execution mode is SPOQ."""
+        return self.strategy is not None and self.strategy.execution_mode == "spoq"

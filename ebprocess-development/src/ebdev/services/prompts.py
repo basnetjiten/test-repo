@@ -73,6 +73,8 @@ EXAMPLE:
         mock_req = ""
         if job_context.mocking_level == "mock_repositories":
             mock_req = "- MOCKING REQUIRED: Isolate network API client calls behind clean repositories. Generate stateful Mock Repository classes with local simulated data to build decoupled, visually interactive screens.\n"
+            if job_context.spoq_epic_dir:
+                mock_req += f"- CONTRACT FIRST: You MUST reference the OpenAPI/data models defined in `{job_context.spoq_epic_dir}/tasks/00-contract.yml` (if it exists) to ensure your mock endpoints exactly match the backend contract.\n"
         elif job_context.mocking_level == "ui_stubs":
             mock_req = "- UI STUBS ONLY: Implement visual presentations and UI stubs without full logic/network integration.\n"
 
