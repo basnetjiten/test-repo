@@ -30,7 +30,6 @@ services:
       - "8000:8000"
     depends_on:
       - opencode
-      - db
     volumes:
       - ./workspace:/workspace
       - ./.opencode:/app/.opencode
@@ -38,7 +37,7 @@ services:
       - OPENCODE_SERVER_URL=http://opencode:4096
       - WORKSPACE_DIR=/workspace
       - OPENCODE_PROJECT_DIR=/workspace/.opencode
-      - POSTGRES_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-ebdevDb}
+      - POSTGRES_URL=${POSTGRES_URL}
       - GIT_USER=${GIT_USER}
       - GIT_TOKEN=${GIT_TOKEN}
       - GITHUB_TOKEN=${GITHUB_TOKEN}
@@ -46,20 +45,3 @@ services:
       - BITBUCKET_APP_PASSWORD=${BITBUCKET_APP_PASSWORD}
       - MAX_REPAIR_ITERATIONS=${MAX_REPAIR_ITERATIONS:-3}
     restart: unless-stopped
-
-  # Database storage for job status logs
-  db:
-    image: postgres:18-alpine
-    container_name: ebprocess-db
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB:-ebdevDb}
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-    ports:
-      - "5432:5432"
-    volumes:
-      - db_data:/var/lib/postgresql
-    restart: always
-
-volumes:
-  db_data:
