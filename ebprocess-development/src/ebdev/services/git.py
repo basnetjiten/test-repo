@@ -126,7 +126,8 @@ class GitService:
                         break
                     except subprocess.CalledProcessError as e:
                         if i == max_retries - 1:
-                            raise GitServiceError(
+                            jls_extract_var = GitServiceError
+                            raise jls_extract_var(
                                 f"Failed to push to remote after {max_retries} attempts: {e.stderr}"
                             )
                         logger.warning(f"Push failed, retrying in 5s... ({i+1}/{max_retries})")

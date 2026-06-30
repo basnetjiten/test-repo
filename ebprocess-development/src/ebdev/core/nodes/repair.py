@@ -22,7 +22,7 @@ async def repair_node(state: GraphState) -> GraphState:
     
     try:
         # Determine which platforms failed
-        failed_plats = [p for p in platforms if state.failed_platforms.get(p) == True]
+        failed_plats = [p for p in platforms if state.failed_platforms.get(p)]
         print(f"[repair] Failed platforms requiring repair: {failed_plats}")
 
         # Gather errors only from failing platforms
