@@ -1,0 +1,23 @@
+# Python Cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environments
+.venv/
+venv/
+ENV/
+env/
+
+# IDE / System
+.DS_Store
+.idea/
+.vscode/
+
+# Project Specific
+.opencode/
+scratch/
