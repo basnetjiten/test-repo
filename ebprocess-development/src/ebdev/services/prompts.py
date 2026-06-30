@@ -44,7 +44,7 @@ EXAMPLE:
 
     # Bug fixer instructions
     elif "bug_fixer" in agent or "bug" in agent:
-        ticket = job_context.jira_ticket
+        ticket = job_context.ticket
         return f"""<{Prompts.INSTRUCTIONS_TAG}>
 {Prompts.PHASE_BUG_FIX}
 
@@ -93,7 +93,7 @@ def build_prompt(
     repo_dir = Path(job_context.repo_path).absolute()
 
     return f"""<{Prompts.ROLE_TAG}>
-Execute your role as the {job_context.current_agent} for job {job_context.jira_ticket_id}.
+Execute your role as the {job_context.current_agent} for job {job_context.ticket_id}.
 </{Prompts.ROLE_TAG}>
 
 <{Prompts.ENV_TAG}>

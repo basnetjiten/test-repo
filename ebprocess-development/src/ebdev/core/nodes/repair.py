@@ -46,9 +46,9 @@ async def repair_node(state: GraphState) -> GraphState:
         # Reached limit - abort job
         if iteration >= config.MAX_REPAIR_ITERATIONS:
             failed_result = JobResult(
-                job_id=ctx.jira_ticket_id,
-                jira_space_name=ctx.jira_space_name,
-                jira_id=ctx.jira_ticket_id,
+                job_id=ctx.ticket_id,
+                space_name=ctx.space_name,
+                ticket_id=ctx.ticket_id,
                 status="failed",
                 errors=new_errors,
                 summary=f"Max repair iterations ({config.MAX_REPAIR_ITERATIONS}) reached. Validations still failing."

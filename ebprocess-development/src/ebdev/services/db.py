@@ -154,8 +154,8 @@ async def get_session_id(job_id: str) -> str | None:
     return job_info.get("opencode_session_id") if job_info else None
 
 
-async def get_session_id_by_jira_id(jira_id: str) -> str | None:
-    """Retrieve the most recent session ID for a Jira ticket ID."""
+async def get_session_id_by_jira_id(ticket_id: str) -> str | None:
+    """Retrieve the most recent session ID for a ticket ID (mapped to jira_id in DB)."""
     if config.POSTGRES_URL:
         try:
             import asyncpg
@@ -167,7 +167,7 @@ async def get_session_id_by_jira_id(jira_id: str) -> str | None:
                     WHERE jira_id = $1 AND opencode_session_id IS NOT NULL
                     ORDER BY created_at DESC LIMIT 1;
                     """,
-                    jira_id,
+                    ticket_id,
                 )
                 return row["opencode_session_id"] if row else None
             finally:
@@ -175,12 +175,12 @@ async def get_session_id_by_jira_id(jira_id: str) -> str | None:
         except ImportError:
             pass
         except Exception as e:
-            logger.error(f"Postgres session fetch by jira failed: {e}.")
+            logger.error(f"Postgres session fetch by ticket ID failed: {e}.")
 
     # Fallback
     data = _load_json(_SESSIONS_JSON_PATH)
     for job_id, val in data.items():
-        if val.get("jira_id") == jira_id and val.get("opencode_session_id"):
+        if val.get("jira_id") == ticket_id and val.get("opencode_session_id"):
             return val.get("opencode_session_id")
     return None
 
@@ -208,7 +208,7 @@ async def sync_state_to_db(state: GraphState) -> bool:
                         summary = EXCLUDED.summary,
                         updated_at = NOW();
                     """,
-                    state.context.jira_ticket_id,
+                    state.context.ticket_id,
                     status,
                     state.status_message,
                 )
@@ -228,7 +228,7 @@ async def sync_state_to_db(state: GraphState) -> bool:
     if state.failed:
         status = "failed"
 
-    data[state.context.jira_ticket_id] = {
+    data[state.context.ticket_id] = {
         "status": status,
         "summary": state.status_message,
         "validation_errors": state.context.validation_errors,

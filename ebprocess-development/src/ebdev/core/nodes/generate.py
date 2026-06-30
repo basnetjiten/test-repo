@@ -59,16 +59,16 @@ async def generate_node(state: GraphState) -> GraphState:
 
         if not plan_file.exists():
             err_result = JobResult(
-                job_id=ctx.jira_ticket_id,
-                jira_space_name=ctx.jira_space_name,
-                jira_id=ctx.jira_ticket_id,
+                job_id=ctx.ticket_id,
+                space_name=ctx.space_name,
+                ticket_id=ctx.ticket_id,
                 status="failed",
                 errors=[f"Plan file {plan_file.name} missing. Planner must succeed first."]
             )
             return platform, err_result, None
 
         # Select agent role
-        label = getattr(ctx, "jira_label", "feature")
+        label = getattr(ctx, "ticket_label", "feature")
         target_agent = "build"
         if label == "bug":
             target_agent = "bug_fixer"
@@ -83,13 +83,13 @@ async def generate_node(state: GraphState) -> GraphState:
         })
 
         # Fetch session ID for this specific platform
-        session_id_key = f"{ctx.jira_ticket_id}_{platform}"
+        session_id_key = f"{ctx.ticket_id}_{platform}"
         existing_session_id = session_ids.get(platform) or await db.get_session_id(session_id_key)
         
-        jira_id = ctx.jira_ticket.id if ctx.jira_ticket else None
+        ticket_id = ctx.ticket.id if ctx.ticket else None
         
-        if not existing_session_id and label in ("bug", "ui_refine") and ctx.linked_jira_ids:
-            for linked_id in ctx.linked_jira_ids:
+        if not existing_session_id and label in ("bug", "ui_refine") and ctx.linked_ticket_ids:
+            for linked_id in ctx.linked_ticket_ids:
                 linked_session_key = f"{linked_id}_{platform}"
                 existing_session_id = await db.get_session_id(linked_session_key)
                 if not existing_session_id:
@@ -100,8 +100,8 @@ async def generate_node(state: GraphState) -> GraphState:
 
         if not existing_session_id:
             existing_session_id = await db.get_session_id(session_id_key)
-            if not existing_session_id and jira_id:
-                existing_session_id = await db.get_session_id_by_jira_id(f"{jira_id}_{platform}")
+            if not existing_session_id and ticket_id:
+                existing_session_id = await db.get_session_id_by_jira_id(f"{ticket_id}_{platform}")
         
         if existing_session_id:
             print(f"[generate][{platform}] Resuming OpenCode session: {existing_session_id}")
@@ -122,7 +122,7 @@ async def generate_node(state: GraphState) -> GraphState:
 
         session_id_to_store = captured_session_id or existing_session_id
         if session_id_to_store:
-            await db.save_session_id(session_id_key, session_id_to_store, jira_id=f"{jira_id}_{platform}")
+            await db.save_session_id(session_id_key, session_id_to_store, jira_id=f"{ticket_id}_{platform}")
 
         return platform, result, session_id_to_store
 
@@ -150,9 +150,9 @@ async def generate_node(state: GraphState) -> GraphState:
             combined_warnings.extend(res.warnings or [])
 
         consolidated_result = JobResult(
-            job_id=ctx.jira_ticket_id,
-            jira_space_name=ctx.jira_space_name,
-            jira_id=ctx.jira_ticket_id,
+            job_id=ctx.ticket_id,
+            space_name=ctx.space_name,
+            ticket_id=ctx.ticket_id,
             status=overall_status,
             summary=f"Builders finished. Consolidated status: {overall_status}",
             errors=combined_errors,

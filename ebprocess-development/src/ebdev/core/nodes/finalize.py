@@ -17,15 +17,15 @@ async def finalize_node(state: GraphState) -> GraphState:
     ctx = state.context
     callback_url = ctx.n8n_callback_url
     
-    print(f"[finalize] Finishing job: {ctx.jira_ticket_id}")
+    print(f"[finalize] Finishing job: {ctx.ticket_id}")
     
     status = "success" if not state.failed else "failed"
     summary = state.result.summary if state.result else "Job completed."
     
     result = JobResult(
-        job_id=ctx.jira_ticket_id,
-        jira_space_name=ctx.jira_space_name,
-        jira_id=ctx.jira_ticket.id if ctx.jira_ticket else ctx.jira_ticket_id,
+        job_id=ctx.ticket_id,
+        space_name=ctx.space_name,
+        ticket_id=ctx.ticket.id if ctx.ticket else ctx.ticket_id,
         status=status,
         summary=summary,
         warnings=[],
@@ -41,7 +41,7 @@ async def finalize_node(state: GraphState) -> GraphState:
 
     # 2. Callback webhook
     if not callback_url:
-        print(f"[finalize] No callback URL for job {ctx.jira_ticket_id} - skipping callback.")
+        print(f"[finalize] No callback URL for job {ctx.ticket_id} - skipping callback.")
     else:
         print(f"[finalize] Posting result to callback URL: {callback_url}")
         try:
@@ -55,7 +55,7 @@ async def finalize_node(state: GraphState) -> GraphState:
 
     duration = round(time.time() - start_time, 2)
     print(f"[finalize] Done in {duration}s.")
-    print(f"[finalize] Job {ctx.jira_ticket_id} finished with status: {status}.")
+    print(f"[finalize] Job {ctx.ticket_id} finished with status: {status}.")
 
     return state.model_copy(update={
         "last_node": "finalize",

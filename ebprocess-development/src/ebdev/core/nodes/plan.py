@@ -98,9 +98,9 @@ async def plan_node(state: GraphState) -> GraphState:
             combined_warnings.extend(res.warnings or [])
 
         consolidated_result = JobResult(
-            job_id=ctx.jira_ticket_id,
-            jira_space_name=ctx.jira_space_name,
-            jira_id=ctx.jira_ticket_id,
+            job_id=ctx.ticket_id,
+            space_name=ctx.space_name,
+            ticket_id=ctx.ticket_id,
             status=overall_status,
             summary=f"Planners completed. Consolidated status: {overall_status}",
             errors=combined_errors,

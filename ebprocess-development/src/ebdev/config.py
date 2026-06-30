@@ -53,7 +53,7 @@ class Config:
 
     WORKSPACE_DIR: str = os.environ.get(
         "WORKSPACE_DIR",
-        str(Path("/Users/ebpearls/Desktop/macmini-migrated/CascadeProjects").resolve()),
+        str((PROJECT_ROOT / "workspace").resolve()),
     )
     MAX_REPAIR_ITERATIONS: int = int(os.environ.get("MAX_REPAIR_ITERATIONS", "3"))
 

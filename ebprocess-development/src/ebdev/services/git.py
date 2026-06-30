@@ -247,7 +247,7 @@ class RemoteRepoService:
         return None
 
     @classmethod
-    async def ensure_repo_exists(cls, repo_url: str, jira_project_key: str = "PROJ") -> bool:
+    async def ensure_repo_exists(cls, repo_url: str, project_key: str = "PROJ") -> bool:
         """
         Check if remote repository exists. If not, attempt to create it.
         Returns True if repo exists or was successfully created, False otherwise.
@@ -282,7 +282,7 @@ class RemoteRepoService:
                         payload = {
                             "scm": "git",
                             "is_private": True,
-                            "project": {"key": jira_project_key}
+                            "project": {"key": project_key}
                         }
                         create_res = await client.post(create_url, json=payload, auth=auth)
                         if create_res.status_code in (200, 201):

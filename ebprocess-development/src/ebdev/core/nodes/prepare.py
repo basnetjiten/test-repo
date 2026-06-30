@@ -30,7 +30,7 @@ async def prepare_node(state: GraphState) -> GraphState:
         else:
             repo_slug = "local-project"
             
-        workspace_id = ctx.jira_space_name or repo_slug
+        workspace_id = ctx.space_name or repo_slug
         
         if ctx.repo_path:
             repo_path = Path(ctx.repo_path)
@@ -67,9 +67,9 @@ async def prepare_node(state: GraphState) -> GraphState:
 
             # Check and auto-create remote repository if missing
             if plat_repo_url:
-                jira_proj_key = ctx.jira_ticket.key.split("-")[0] if ctx.jira_ticket and "-" in ctx.jira_ticket.key else "PROJ"
+                proj_key = ctx.ticket.id.split("-")[0] if ctx.ticket and "-" in ctx.ticket.id else "PROJ"
                 await send_progress(state, f"Checking/creating remote repository: {plat_repo_url}...")
-                repo_exists = await RemoteRepoService.ensure_repo_exists(plat_repo_url, jira_project_key=jira_proj_key)
+                repo_exists = await RemoteRepoService.ensure_repo_exists(plat_repo_url, project_key=proj_key)
                 if not repo_exists:
                     print(f"[prepare][{platform}] Warning: Remote repository setup returned error for {plat_repo_url}")
 
@@ -77,8 +77,8 @@ async def prepare_node(state: GraphState) -> GraphState:
                 await asyncio.to_thread(git.clone_or_fetch, plat_repo_url, ctx.starter_kit_url)
 
             # Sanitized branch checkout
-            sanitized_feature = _sanitize_branch_name(ctx.feature_name or ctx.jira_ticket.title)
-            branch_name = f"feature/{ctx.jira_ticket.id}-{sanitized_feature}"
+            sanitized_feature = _sanitize_branch_name(ctx.feature_name or ctx.ticket.title)
+            branch_name = f"feature/{ctx.ticket.id}-{sanitized_feature}"
             
             await asyncio.to_thread(git.checkout_branch, branch_name)
 
@@ -118,10 +118,10 @@ async def prepare_node(state: GraphState) -> GraphState:
         raise GitServiceError(err) from e
 
     # Update state context values
-    sanitized_feature_slug = _sanitize_feature_name(ctx.feature_name or ctx.jira_ticket.title)
+    sanitized_feature_slug = _sanitize_feature_name(ctx.feature_name or ctx.ticket.title)
     updated_ctx = ctx.model_copy(update={
         "repo_path": str(repo_path),
-        "generated_branch": f"feature/{ctx.jira_ticket.id}-{_sanitize_branch_name(ctx.feature_name or ctx.jira_ticket.title)}",
+        "generated_branch": f"feature/{ctx.ticket.id}-{_sanitize_branch_name(ctx.feature_name or ctx.ticket.title)}",
         "feature_name": sanitized_feature_slug
     })
 

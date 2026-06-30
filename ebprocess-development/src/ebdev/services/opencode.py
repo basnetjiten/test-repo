@@ -41,7 +41,7 @@ def extract_json_block(text: str, job_id: str) -> dict | None:
     if json_match:
         try:
             data = json.loads(json_match.group(1))
-            if isinstance(data, dict) and (data.get("job_id") == job_id or data.get("jira_id") == job_id):
+            if isinstance(data, dict) and (data.get("job_id") == job_id or data.get("ticket_id") == job_id or data.get("jira_id") == job_id):
                 return data
         except (json.JSONDecodeError, TypeError):
             pass
@@ -52,7 +52,7 @@ def extract_json_block(text: str, job_id: str) -> dict | None:
         end_idx = text.rfind("}")
         if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
             data = json.loads(text[start_idx:end_idx + 1])
-            if isinstance(data, dict) and (data.get("job_id") == job_id or data.get("jira_id") == job_id):
+            if isinstance(data, dict) and (data.get("job_id") == job_id or data.get("ticket_id") == job_id or data.get("jira_id") == job_id):
                 return data
     except (json.JSONDecodeError, TypeError):
         pass
@@ -120,10 +120,10 @@ class OpenCodeService:
     @staticmethod
     def write_context(job_context: JobContext) -> Path:
         """Serialize JobContext to context.json metadata descriptor in target directory."""
-        if not job_context.jira_ticket.figma_url:
-            url = extract_figma_url(job_context.jira_ticket.description)
+        if not job_context.ticket.figma_url:
+            url = extract_figma_url(job_context.ticket.description)
             if url:
-                job_context.jira_ticket.figma_url = url
+                job_context.ticket.figma_url = url
 
         tasks_dir = Path(config.OPENCODE_PROJECT_DIR) / "tasks"
         tasks_dir.mkdir(parents=True, exist_ok=True)
@@ -168,7 +168,7 @@ class OpenCodeService:
         # 1. Initialize session if not resuming
         if not session_id:
             try:
-                session_id = await client.create_session(title=f"Job {job_context.jira_ticket_id}")
+                session_id = await client.create_session(title=f"Job {job_context.ticket_id}")
             except Exception as e:
                 logger.error(f"Failed to create agent execution session: {e}")
                 raise OpenCodeExecutionError(f"OpenCode session creation failed: {e}")
@@ -218,15 +218,15 @@ class OpenCodeService:
         reply_text = "".join(p.get("text", "") for p in parts if p.get("type") == "text")
         
         logger.info(f"\nAgent execution complete on session: {session_id}")
-        data = extract_json_block(reply_text, job_context.jira_ticket_id)
+        data = extract_json_block(reply_text, job_context.ticket_id)
 
         if data:
             try:
                 logger.info("Parsed successful agent metadata block.")
                 # Assure base context elements are set in return payload
-                data.setdefault("jira_space_name", job_context.jira_space_name)
-                data.setdefault("jira_id", job_context.jira_ticket_id)
-                data.setdefault("job_id", job_context.jira_ticket_id)
+                data.setdefault("space_name", job_context.space_name)
+                data.setdefault("ticket_id", job_context.ticket_id)
+                data.setdefault("job_id", job_context.ticket_id)
                 data.setdefault("status", "success")
                 return JobResult(**data), session_id
             except (ValueError, ValidationError) as e:
@@ -234,9 +234,9 @@ class OpenCodeService:
 
         # Final fallback status
         return JobResult(
-            job_id=job_context.jira_ticket_id,
-            jira_space_name=job_context.jira_space_name,
-            jira_id=job_context.jira_ticket_id,
+            job_id=job_context.ticket_id,
+            space_name=job_context.space_name,
+            ticket_id=job_context.ticket_id,
             status="success",
             summary="Operation completed successfully.",
         ), session_id
