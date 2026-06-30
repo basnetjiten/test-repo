@@ -16,6 +16,17 @@ logger = get_logger(__name__)
 class ApiStrategy(PlatformStrategy):
     """Execution strategy handling linting, dependencies, and tests for python backend projects."""
 
+    async def _run_command(self, cmd: list[str], cwd: Path) -> tuple[int, bytes, bytes]:
+        """Execute a subprocess command in the given working directory."""
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            cwd=str(cwd),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+        return proc.returncode, stdout, stderr
+
     async def prepare(self, repo_path: Path, branch_name: str) -> None:
         """Install python dependency requirements."""
         logger.info(f"Preparing Python API repository at {repo_path}")
@@ -23,25 +34,17 @@ class ApiStrategy(PlatformStrategy):
         pyproj = repo_path / "pyproject.toml"
 
         if req_txt.exists():
-            proc = await asyncio.create_subprocess_exec(
-                "pip", "install", "-r", "requirements.txt",
-                cwd=str(repo_path),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+            returncode, _, stderr = await self._run_command(
+                ["pip", "install", "-r", "requirements.txt"], repo_path
             )
-            stdout, stderr = await proc.communicate()
-            if proc.returncode != 0:
-                logger.warning(f"pip install requirements failed: {stderr.decode()}")
+            if returncode != 0:
+                logger.warning(f"pip install requirements failed: {stderr.decode().strip()}")
         elif pyproj.exists():
-            proc = await asyncio.create_subprocess_exec(
-                "pip", "install", "-e", ".",
-                cwd=str(repo_path),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+            returncode, _, stderr = await self._run_command(
+                ["pip", "install", "-e", "."], repo_path
             )
-            stdout, stderr = await proc.communicate()
-            if proc.returncode != 0:
-                logger.warning(f"pip install editable package failed: {stderr.decode()}")
+            if returncode != 0:
+                logger.warning(f"pip install editable package failed: {stderr.decode().strip()}")
 
     async def validate(self, repo_path: Path) -> list[str]:
         """Execute Python linters (ruff/flake8) and test suites (pytest/unittest)."""
@@ -51,51 +54,29 @@ class ApiStrategy(PlatformStrategy):
         # 1. Run Lint check
         lint_ok = True
         lint_tool = None
-        if shutil.which("ruff"):
-            lint_tool = "ruff"
-            proc = await asyncio.create_subprocess_exec(
-                "ruff", "check", ".",
-                cwd=str(repo_path),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            await proc.communicate()
-            lint_ok = (proc.returncode == 0)
-        elif shutil.which("flake8"):
-            lint_tool = "flake8"
-            proc = await asyncio.create_subprocess_exec(
-                "flake8", ".",
-                cwd=str(repo_path),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            await proc.communicate()
-            lint_ok = (proc.returncode == 0)
+        for tool in ["ruff", "flake8"]:
+            if shutil.which(tool):
+                lint_tool = tool
+                cmd = [tool, "check", "."] if tool == "ruff" else [tool, "."]
+                returncode, _, stderr = await self._run_command(cmd, repo_path)
+                lint_ok = (returncode == 0)
+                if not lint_ok:
+                    logger.warning(f"API Linting with {tool} failed: {stderr.decode().strip()}")
+                break
 
         # 2. Run Test check
         test_ok = True
         test_tool = None
         if (repo_path / "tests").exists() or (repo_path / "pytest.ini").exists():
-            if shutil.which("pytest"):
-                test_tool = "pytest"
-                proc = await asyncio.create_subprocess_exec(
-                    "pytest",
-                    cwd=str(repo_path),
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                await proc.communicate()
-                test_ok = (proc.returncode == 0)
-            else:
-                test_tool = "unittest"
-                proc = await asyncio.create_subprocess_exec(
-                    "python3", "-m", "unittest", "discover",
-                    cwd=str(repo_path),
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                await proc.communicate()
-                test_ok = (proc.returncode == 0)
+            for tool in ["pytest", "unittest"]:
+                if shutil.which(tool):
+                    test_tool = tool
+                    cmd = [tool] if tool == "pytest" else ["python3", "-m", "unittest", "discover"]
+                    returncode, _, stderr = await self._run_command(cmd, repo_path)
+                    test_ok = (returncode == 0)
+                    if not test_ok:
+                        logger.warning(f"API Testing with {tool} failed: {stderr.decode().strip()}")
+                    break
 
         if not lint_ok:
             errors.append(f"API Linting failed using {lint_tool or 'linter'}.")
