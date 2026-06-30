@@ -25,6 +25,7 @@ These rules govern the architecture, coding practices, and file structures gener
 ## 3. Code Quality, Typing and Python Standards
 1. **Pythonic Structure**:
    - Follow standard Python project packaging guidelines (e.g., modular packages, standard imports, docstrings for modules/methods).
+   - Use absolute imports within the package (`from ebdev.core import ...` instead of relative `from ..core import ...`).
    - Use `poetry` or standard `pyproject.toml` configurations.
 2. **Strong Typing Mandatory**:
    - All functions and class methods MUST have comprehensive type hinting for parameters and return types.
@@ -36,3 +37,11 @@ These rules govern the architecture, coding practices, and file structures gener
    - Never catch broad exceptions (`except Exception:`) without logging and re-raising/translating to domain errors.
    - Define context-specific domain exceptions (e.g. `GitServiceError`, `OpenCodeExecutionError`) to keep code modular and readable.
    - Use Sentry capturing for critical pipeline failures.
+
+## 4. "Dark Factory" Automation Guidelines
+1. **Zero-Interaction Headless Executions**:
+   - All integrations (git, flutter, pytest, api, opencode) must run fully headlessly and non-interactively (e.g., `--no-interactive` or equivalent flags).
+   - Avoid code paths that assume user interaction or wait for stdin inputs.
+2. **Robust Telemetry and Log Traceability**:
+   - Log steps using structured logging principles. Stream real-time output progress (like SSE event delta prints) to keep logs alive and traceable.
+   - Always include unique context variables (such as `job_id`, `jira_id`, `session_id`) in log entries to simplify log correlation.
