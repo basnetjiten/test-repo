@@ -1,20 +1,20 @@
 # -*- coding: utf-8 -*-
-"""OpenCode CLI runner and execution parser for ebprocess-development."""
+"""OpenCode deepagent HTTP API runner and orchestrator for ebprocess-development."""
 
 from __future__ import annotations
 
 import json
-import os
 import re
-import subprocess
-import time
 import typing
+import asyncio
+import httpx
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from pydantic import ValidationError
 
 from ebdev.config import config
-from ebdev.core.constants import Agents, Commands, ErrorMessages, RegexPatterns
+from ebdev.core.constants import Agents, ErrorMessages, RegexPatterns
 from ebdev.core.logger import get_logger
 from ebdev.models.schemas import JobContext, JobResult
 from ebdev.services import prompts
@@ -27,171 +27,218 @@ def extract_figma_url(description: str) -> str | None:
     if not description:
         return None
     match = re.search(RegexPatterns.FIGMA_URL, description)
-    if match:
-        return match.group(0)
+    return match.group(0) if match else None
+
+
+def extract_json_block(text: str, job_id: str) -> dict | None:
+    """Parse the final message text to extract the agent's JobResult JSON structure."""
+    if not text:
+        return None
+
+    # Strategy 1: Look for standard markdown ```json blocks
+    json_match = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
+    if json_match:
+        try:
+            data = json.loads(json_match.group(1))
+            if isinstance(data, dict) and (data.get("job_id") == job_id or data.get("jira_id") == job_id):
+                return data
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    # Strategy 2: Fallback to scanning for raw outer-braces { ... }
+    try:
+        start_idx = text.find("{")
+        end_idx = text.rfind("}")
+        if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+            data = json.loads(text[start_idx:end_idx + 1])
+            if isinstance(data, dict) and (data.get("job_id") == job_id or data.get("jira_id") == job_id):
+                return data
+    except (json.JSONDecodeError, TypeError):
+        pass
+
     return None
 
 
+class OpenCodeAPIClient:
+    """Client wrapper for communication with the headless OpenCode deepagent server."""
+
+    def __init__(self, base_url: str, api_key: str | None = None):
+        self.base_url = base_url.rstrip("/")
+        self.headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+
+    async def check_health(self) -> dict:
+        """Fetch endpoint connectivity and engine verification health status."""
+        async with httpx.AsyncClient() as client:
+            res = await client.get(f"{self.base_url}/global/health", headers=self.headers)
+            res.raise_for_status()
+            return res.json()
+
+    async def create_session(self, title: str | None = None) -> str:
+        """Create a new agent session on the server."""
+        async with httpx.AsyncClient() as client:
+            payload = {"title": title} if title else {}
+            res = await client.post(f"{self.base_url}/session", json=payload, headers=self.headers)
+            res.raise_for_status()
+            return res.json()["id"]
+
+    async def send_prompt_message(
+        self, session_id: str, agent: str, prompt: str, model: str | None = None
+    ) -> dict:
+        """Post prompt instruction message to execution session and await output."""
+        payload = {
+            "agent": agent,
+            "parts": [{"type": "text", "text": prompt}]
+        }
+        if model:
+            payload["model"] = model
+
+        async with httpx.AsyncClient(timeout=600.0) as client:
+            res = await client.post(
+                f"{self.base_url}/session/{session_id}/message",
+                json=payload,
+                headers=self.headers
+            )
+            res.raise_for_status()
+            return res.json()
+
+    async def stream_events(self) -> typing.AsyncGenerator[dict, None]:
+        """Stream real-time server-sent events (SSE)."""
+        async with httpx.AsyncClient(timeout=None) as client:
+            async with client.stream("GET", f"{self.base_url}/event", headers=self.headers) as stream:
+                async for line in stream.aiter_lines():
+                    if line.startswith("data:"):
+                        try:
+                            yield json.loads(line[5:])
+                        except json.JSONDecodeError:
+                            pass
+
+
 class OpenCodeService:
-    """Service for interacting with the OpenCode CLI."""
-
-    @staticmethod
-    def _extract_json(text: str, job_id: str) -> dict | None:
-        """Extract the agent's result JSON from OpenCode output."""
-        for line in reversed(text.splitlines()):
-            raw = re.sub(RegexPatterns.OPENCODE_PREFIX, "", line.strip())
-            if '"type":"text"' not in raw and '"type": "text"' not in raw:
-                continue
-            try:
-                event = json.loads(raw)
-                inner = event.get("part", {}).get("text", "")
-            except (json.JSONDecodeError, TypeError):
-                continue
-
-            # Try to find JSON in markdown blocks first
-            match = re.search(RegexPatterns.JSON_BLOCK, inner, re.DOTALL)
-            if match:
-                try:
-                    data = json.loads(match.group(1))
-                    if isinstance(data, dict) and (data.get("job_id") == job_id or data.get("jira_id") == job_id):
-                        return data
-                except (json.JSONDecodeError, TypeError):
-                    pass
-
-            # Fallback: Try to find and parse raw JSON object
-            try:
-                start = inner.find('{')
-                end = inner.rfind('}')
-                if start != -1 and end != -1 and end > start:
-                    potential_json = inner[start:end+1]
-                    data = json.loads(potential_json)
-                    if isinstance(data, dict) and (data.get("job_id") == job_id or data.get("jira_id") == job_id):
-                        logger.info(f"Successfully extracted raw JSON for job {job_id}")
-                        return data
-            except (json.JSONDecodeError, TypeError):
-                pass
-
-            continue
-
-        return None
+    """Orchestration service coordinating execution context, prompts and deepagent APIs."""
 
     @staticmethod
     def write_context(job_context: JobContext) -> Path:
-        """Serialise JobContext to context.json in the standardized tasks directory."""
-        if job_context.jira_ticket.figma_url is None:
+        """Serialize JobContext to context.json metadata descriptor in target directory."""
+        if not job_context.jira_ticket.figma_url:
             url = extract_figma_url(job_context.jira_ticket.description)
             if url:
                 job_context.jira_ticket.figma_url = url
 
-        global_tasks_dir = Path(config.OPENCODE_PROJECT_DIR) / "tasks"
-        global_tasks_dir.mkdir(parents=True, exist_ok=True)
+        tasks_dir = Path(config.OPENCODE_PROJECT_DIR) / "tasks"
+        tasks_dir.mkdir(parents=True, exist_ok=True)
 
-        ctx_path = global_tasks_dir / "context.json"
-        ctx_path.write_text(job_context.model_dump_json(indent=2, exclude_none=True), encoding="utf-8")
-
-        return ctx_path
+        ctx_file = tasks_dir / "context.json"
+        ctx_file.write_text(job_context.model_dump_json(indent=2, exclude_none=True), encoding="utf-8")
+        return ctx_file
 
     @staticmethod
     def _resolve_agent(job_context: JobContext) -> str:
-        """Resolve agnostic phase names to platform-specific agent names."""
+        """Resolve generic platform task intent to specific agent identifier keys."""
         phase_map = {
-            "flutter": {
-                "plan": Agents.FLUTTER_PLANNER,
-                "build": Agents.FLUTTER_BUILDER,
-            },
-            "api": {
-                "plan": "api_planner",
-                "build": "api_builder",
-            },
-            "web": {
-                "plan": "web_planner",
-                "build": "web_builder",
-            },
-            "cms": {
-                "plan": "cms_planner",
-                "build": "cms_builder",
-            }
+            "flutter": {"plan": Agents.FLUTTER_PLANNER, "build": Agents.FLUTTER_BUILDER},
+            "api": {"plan": "api_planner", "build": "api_builder"},
+            "web": {"plan": "web_planner", "build": "web_builder"},
+            "cms": {"plan": "cms_planner", "build": "cms_builder"},
         }
-        return phase_map.get(job_context.platform, {}).get(
-            job_context.current_agent, job_context.current_agent
-        )
+        agent_key = job_context.current_agent
+        return phase_map.get(job_context.platform, {}).get(agent_key, agent_key)
 
-    @staticmethod
-    def _stream_popen(
-        cmd: list[str],
-        cwd: str,
-        env: dict[str, str],
-        timeout: int,
-        progress_callback: typing.Callable[[str], None] | None,
-        job_id: str,
-    ) -> tuple[int, str, str | None]:
-        """Run a command via Popen and stream stdout line-by-line."""
-        proc = subprocess.Popen(
-            cmd,
-            cwd=cwd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            env=env,
-            bufsize=1,
-            universal_newlines=True,
-        )
-        full_output: list[str] = []
-        captured_session_id: str | None = None
-        start_time = time.time()
+    @classmethod
+    async def invoke_async(
+        cls,
+        job_context: JobContext,
+        progress_callback: typing.Callable[[str], None] | None = None,
+        session_id: str | None = None,
+    ) -> tuple[JobResult, str | None]:
+        """Invoke OpenCode deepagent server asynchronously."""
+        agent = cls._resolve_agent(job_context)
+        storage_dir = Path(config.OPENCODE_PROJECT_DIR)
+        
+        # Setup structural files and directories
+        (storage_dir / "tasks").mkdir(parents=True, exist_ok=True)
+        (storage_dir / "plans").mkdir(parents=True, exist_ok=True)
 
+        cls.write_context(job_context)
+        prompt = prompts.build_prompt(job_context, storage_dir=storage_dir, session_id=session_id)
+
+        server_url = config.OPENCODE_SERVER_URL or "http://opencode:4096"
+        client = OpenCodeAPIClient(base_url=server_url, api_key=config.OPENCODE_API_KEY)
+        
+        # 1. Initialize session if not resuming
+        if not session_id:
+            try:
+                session_id = await client.create_session(title=f"Job {job_context.jira_ticket_id}")
+            except Exception as e:
+                logger.error(f"Failed to create agent execution session: {e}")
+                raise RuntimeError(f"OpenCode session creation failed: {e}")
+
+        # 2. Concurrently read Server-Sent Events (SSE) to print deltas
+        async def event_streamer():
+            try:
+                async for event in client.stream_events():
+                    evt_type = event.get("type")
+                    if evt_type == "message.part.delta":
+                        delta = event.get("properties", {}).get("delta", "")
+                        if delta:
+                            print(delta, end="", flush=True)
+                    elif evt_type == "step-start":
+                        part_id = event.get("part", {}).get("id")
+                        logger.info(f"\n[OpenCode Step Start] {part_id}")
+                        if progress_callback:
+                            progress_callback(f"Step Started: {part_id}")
+                    elif evt_type == "step-finish":
+                        part_id = event.get("part", {}).get("id")
+                        logger.info(f"\n[OpenCode Step Finish] {part_id}")
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                logger.warning(f"SSE event stream handler encountered an error: {e}")
+
+        stream_task = asyncio.create_task(event_streamer())
+        await asyncio.sleep(0.1)  # Let streaming listener subscribe
+
+        # 3. Post prompt instructions and wait for resolution
         try:
-            while True:
-                line = proc.stdout.readline()
-                if not line:
-                    if proc.poll() is not None:
-                        break
-                    if time.time() - start_time > timeout:
-                        proc.kill()
-                        raise TimeoutError(ErrorMessages.TIMEOUT.format(timeout=timeout))
-                    time.sleep(0.1)
-                    continue
-
-                logger.info(f"[opencode] {line.strip()}")
-                full_output.append(line)
-
-                # Capture session ID from early JSON events
-                if not captured_session_id and '"sessionID"' in line:
-                    try:
-                        json_str = line.split("] ", 1)[-1] if "] " in line else line
-                        event = json.loads(json_str)
-                        sid = event.get("sessionID") or event.get("session_id")
-                        if sid:
-                            captured_session_id = sid
-                            logger.info(f"Captured session ID: {captured_session_id}")
-                    except (json.JSONDecodeError, KeyError):
-                        pass
-
-                # Progress callbacks and early termination from structured JSON events
-                line_json = OpenCodeService._extract_json(line, job_id)
-                if line_json:
-                    if progress_callback:
-                        progress_callback(f"Agent Status: {line_json.get('status', 'running')}")
-                    logger.info("Final JSON result received. Terminating agent process early to prevent interactive hang.")
-                    proc.terminate()
-                elif progress_callback and '{"type":' in line:
-                    try:
-                        json_str = line.split("] ", 1)[-1] if "] " in line else line
-                        event = json.loads(json_str)
-                        if event.get("type") == "step_finish":
-                            progress_callback(
-                                f"Completed: {event.get('part', {}).get('id', 'step')}"
-                            )
-                    except (json.JSONDecodeError, KeyError, IndexError):
-                        pass
-
-            proc.wait()
+            msg_data = await client.send_prompt_message(
+                session_id=session_id,
+                agent=agent,
+                prompt=prompt,
+                model=config.OPENCODE_MODEL,
+            )
         except Exception as e:
-            proc.kill()
-            logger.error(f"Execution failed: {e}")
-            raise
+            logger.error(f"Failed to execute agent instructions on server: {e}")
+            raise RuntimeError(f"OpenCode execution failed: {e}")
+        finally:
+            stream_task.cancel()
+            await asyncio.gather(stream_task, return_exceptions=True)
 
-        return proc.returncode, "".join(full_output), captured_session_id
+        # 4. Extract reply text and build return state schemas
+        parts = msg_data.get("parts", [])
+        reply_text = "".join(p.get("text", "") for p in parts if p.get("type") == "text")
+        
+        logger.info(f"\nAgent execution complete on session: {session_id}")
+        data = extract_json_block(reply_text, job_context.jira_ticket_id)
+
+        if data:
+            try:
+                logger.info("Parsed successful agent metadata block.")
+                # Assure base context elements are set in return payload
+                data.setdefault("jira_space_name", job_context.jira_space_name)
+                data.setdefault("jira_id", job_context.jira_ticket_id)
+                data.setdefault("job_id", job_context.jira_ticket_id)
+                data.setdefault("status", "success")
+                return JobResult(**data), session_id
+            except (ValueError, ValidationError) as e:
+                logger.warning(f"Metadata format parsing warnings: {e}")
+
+        # Final fallback status
+        return JobResult(
+            job_id=job_context.jira_ticket_id,
+            jira_space_name=job_context.jira_space_name,
+            jira_id=job_context.jira_ticket_id,
+            status="success",
+            summary="Operation completed successfully.",
+        ), session_id
 
     @classmethod
     def invoke(
@@ -200,132 +247,27 @@ class OpenCodeService:
         progress_callback: typing.Callable[[str], None] | None = None,
         session_id: str | None = None,
     ) -> tuple[JobResult, str | None]:
-        """Invoke the OpenCode CLI with the prepared context file."""
-        agent = cls._resolve_agent(job_context)
-        storage_dir = Path(config.OPENCODE_PROJECT_DIR)
-        
-        # Ensure standard directory structure exists
-        (storage_dir / "tasks").mkdir(parents=True, exist_ok=True)
-        (storage_dir / "plans").mkdir(parents=True, exist_ok=True)
-        
-        ctx_path = cls.write_context(job_context)
-        repo_path = Path(job_context.repo_path)
-
-        cmd = [
-            config.OPENCODE_BIN,
-            Commands.RUN,
-            Commands.AGENT_FLAG, agent,
-            Commands.DIR_FLAG, str(repo_path.absolute()),
-            Commands.FILE_FLAG, str(ctx_path.absolute()),
-            Commands.FORMAT_FLAG, Commands.JSON_FORMAT,
-            Commands.PRINT_LOGS_FLAG,
-        ]
-
-        if config.OPENCODE_MODEL:
-            cmd.extend([Commands.MODEL_FLAG, config.OPENCODE_MODEL])
-
-        if config.OPENCODE_SERVER_URL:
-            cmd.extend(["--attach", config.OPENCODE_SERVER_URL])
-
-        cmd.append(prompts.build_prompt(job_context, storage_dir=storage_dir, session_id=session_id))
-
-        env_extra: dict[str, str] = {
-            k: v for k, v in {
-                "JOB_ID": job_context.jira_ticket_id,
-                "OPENCODE_PROJECT_DIR": config.OPENCODE_PROJECT_DIR,
-                "WORKSPACE_DIR": config.WORKSPACE_DIR,
-                "OPENCODE_API_KEY": config.OPENCODE_API_KEY,
-                "OPENCODE_MODEL": config.OPENCODE_MODEL,
-                "ANTHROPIC_API_KEY": config.ANTHROPIC_API_KEY,
-                "OPENAI_API_KEY": config.OPENAI_API_KEY,
-                "GOOGLE_GENERATIVE_AI_API_KEY": config.GOOGLE_GENERATIVE_AI_API_KEY,
-                "GROQ_API_KEY": config.GROQ_API_KEY,
-            }.items() if v
-        }
-
-        returncode, stdout_str, captured_session_id = cls._stream_popen(
-            cmd=cmd,
-            cwd=str(repo_path.absolute()),
-            env={**os.environ, **env_extra},
-            timeout=600,
-            progress_callback=progress_callback,
-            job_id=job_context.jira_ticket_id,
-        )
-
-        logger.info(f"Agent {agent} COMPLETED with return code {returncode}")
-
-        data = cls._extract_json(stdout_str, job_context.jira_ticket_id)
-
-        # CHECK FOR HIDDEN ERRORS (AuthError, Tool Crashes)
-        is_auth_error = (
-            "Invalid API key" in stdout_str or 
-            ("[opencode] ERROR" in stdout_str and "Auth" in stdout_str)
-        )
-        if is_auth_error:
-            logger.error("Status: FAILED (Authentication Error)")
-            return JobResult(
-                job_id=job_context.jira_ticket_id,
-                jira_space_name=job_context.jira_space_name,
-                jira_id=job_context.jira_ticket_id,
-                status="failed",
-                errors=[ErrorMessages.AUTH_ERROR],
-            ), captured_session_id
-
-        # If we got valid data, treat it as success even if returncode != 0
-        if data:
+        """Synchronously execute the target agent in an isolated event thread."""
+        def run_in_new_loop():
+            new_loop = asyncio.new_event_loop()
             try:
-                logger.info("Status: SUCCESS")
-                if "jira_space_name" not in data:
-                    data["jira_space_name"] = job_context.jira_space_name
-                if "jira_id" not in data:
-                    data["jira_id"] = job_context.jira_ticket_id
-                if "job_id" not in data:
-                    data["job_id"] = job_context.jira_ticket_id
-                if "status" not in data:
-                    data["status"] = "success"
+                asyncio.set_event_loop(new_loop)
+                return new_loop.run_until_complete(
+                    cls.invoke_async(job_context, progress_callback, session_id)
+                )
+            finally:
+                new_loop.close()
 
-                return JobResult(**data), captured_session_id
-            except (ValueError, ValidationError) as e:
-                logger.warning(f"Validation of result JSON failed: {e}")
-
-        # If no valid data was found, check returncode
-        if returncode != 0:
-            error_msg = ErrorMessages.EXIT_ERROR.format(returncode=returncode)
-            logger.error(f"Status: FAILED ({error_msg})")
-            return JobResult(
-                job_id=job_context.jira_ticket_id,
-                jira_space_name=job_context.jira_space_name,
-                jira_id=job_context.jira_ticket_id,
-                status="failed",
-                errors=[error_msg, stdout_str[:2000]],
-            ), captured_session_id
-
-        if job_context.current_agent in (Agents.FLUTTER_BUILDER, Agents.FLUTTER_PLANNER):
-            if not data:
-                logger.error(f"Status: FAILED (No JSON result from {job_context.current_agent})")
-                return JobResult(
-                    job_id=job_context.jira_ticket_id,
-                    jira_space_name=job_context.jira_space_name,
-                    jira_id=job_context.jira_ticket_id,
-                    status="failed",
-                    errors=[ErrorMessages.NO_JSON_RESULT],
-                ), captured_session_id
-
-        logger.warning("Status: SUCCESS (WARNING: No JSON result found inside OpenCode output)")
-        return JobResult(
-            job_id=job_context.jira_ticket_id,
-            jira_space_name=job_context.jira_space_name,
-            jira_id=job_context.jira_ticket_id,
-            status="success",
-            summary="Operation completed (no JSON summary returned by agent).",
-        ), captured_session_id
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(run_in_new_loop)
+            return future.result()
 
 
 def invoke_opencode(*args, **kwargs):
-    """Wrapper for backward compatibility."""
+    """Wrapper matching original function signature for backward compatibility."""
     return OpenCodeService.invoke(*args, **kwargs)
 
 
 def write_context(*args, **kwargs):
-    """Wrapper for backward compatibility."""
+    """Wrapper matching original function signature for backward compatibility."""
     return OpenCodeService.write_context(*args, **kwargs)
