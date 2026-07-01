@@ -19,9 +19,12 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import httpx
 import yaml
+from pydantic import ValidationError
 
 from ebdev.config import config
+from ebdev.core.constants import Agents
 from ebdev.core.nodes.common import send_progress
 from ebdev.models.schemas import OrchestrationStrategy, SPOQTask
 from ebdev.services.opencode import OpenCodeAPIClient
@@ -123,10 +126,10 @@ async def orchestrate_node(state: GraphState) -> GraphState:
             server_url = config.OPENCODE_SERVER_URL or DEFAULT_OPENCODE_SERVER_URL
             client = OpenCodeAPIClient(base_url=server_url, api_key=config.OPENCODE_API_KEY)
             
-            session_id = await client.create_session(title=f"Architect-{ticket_id}")
+            session_id = await client.create_session(title=f"Orchestrator-{ticket_id}")
             res = await client.send_prompt_message(
                 session_id=session_id,
-                agent="architect",
+                agent=Agents.ORCHESTRATOR,
                 prompt=prompt,
                 model=config.OPENCODE_MODEL
             )
@@ -140,7 +143,7 @@ async def orchestrate_node(state: GraphState) -> GraphState:
                 data = json.loads(json_match.group(1))
                 strategy = OrchestrationStrategy(**data)
                 logger.info("LLM architect strategy selected: %s (%s complexity)", strategy.execution_mode, strategy.complexity)
-        except Exception as e:
+        except (httpx.HTTPError, json.JSONDecodeError, ValidationError, AttributeError, KeyError) as e:
             logger.warning("LLM architect failed, using rule-based fallback: %s", e)
 
     # Log the strategy decision
@@ -155,9 +158,9 @@ async def orchestrate_node(state: GraphState) -> GraphState:
     # Generate SPOQ Task Queue
     spoq_epic_dir = None
     if strategy.execution_mode == "spoq":
-        # Resolve repo path using pathlib
-        repo_path = Path(ctx.repo_path).resolve()
-        epic_dir = repo_path / "spoq" / "epics" / "active" / ticket_id
+        # Store SPOQ epic queue in the central .opencode/spoq directory
+        opencode_dir = Path(config.OPENCODE_PROJECT_DIR).resolve()
+        epic_dir = opencode_dir / "spoq" / "epics" / "active" / ticket_id
         tasks_dir = epic_dir / "tasks"
         tasks_dir.mkdir(parents=True, exist_ok=True)
         

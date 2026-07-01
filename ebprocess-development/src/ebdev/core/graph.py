@@ -118,11 +118,17 @@ def _route_after_validate(state: GraphState) -> str:
             
         # Check if there are any pending tasks left
         all_tasks = get_spoq_tasks(state.context.spoq_epic_dir)
+        logger.info("[SPOQ Routing] Loaded %d tasks from %s", len(all_tasks), state.context.spoq_epic_dir)
+        for t in all_tasks:
+            logger.info("  Task %s: status=%s", t.get("id"), t.get("status"))
         remaining = [t for t in all_tasks if t["status"] in ["pending", "blocked"]]
+        logger.info("[SPOQ Routing] Remaining tasks: %s", [t.get("id") for t in remaining])
         
         if remaining:
+            logger.info("[SPOQ Routing] Advancing to next planning phase.")
             return "plan"
             
+        logger.info("[SPOQ Routing] All tasks completed. Proceeding to publish.")
         return "publish"
         
     else:

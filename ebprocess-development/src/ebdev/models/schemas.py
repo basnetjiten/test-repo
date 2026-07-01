@@ -31,6 +31,8 @@ class JobContext(BaseModel):
     project_repo: Optional[str] = None
     starter_kit_url: Optional[str] = None
     starter_type: Optional[str] = None
+    # Per-platform scaffold types. Defaults: "api" → "nestjs", "flutter" → "flutter".
+    starter_types: Dict[str, str] = Field(default_factory=lambda: {"api": "nestjs", "flutter": "flutter"})
     n8n_callback_url: Optional[str] = None
     linked_ticket_ids: List[str] = Field(default_factory=list)
 

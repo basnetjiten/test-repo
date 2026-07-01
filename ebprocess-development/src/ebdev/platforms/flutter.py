@@ -117,6 +117,5 @@ class FlutterStrategy(PlatformStrategy):
             raise PlatformStrategyError("Failed to scaffold Flutter project template.")
 
         # Sync/bootstrap actions
-        await flutter_cmd.simplex_init(str(repo_path), output=output_lines)
         await flutter_cmd.pub_get(str(repo_path), output=output_lines)
         await flutter_cmd.build_runner(str(repo_path), output=output_lines)

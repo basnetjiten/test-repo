@@ -54,9 +54,13 @@ class Config:
     OPENCODE_SERVER_URL: str = os.environ.get("OPENCODE_SERVER_URL", "")
     OPENCODE_API_KEY: str = os.environ.get("OPENCODE_API_KEY", "")
     OPENCODE_MODEL: str = os.environ.get("OPENCODE_MODEL", "claude-3-5-sonnet")
-    OPENCODE_PROJECT_DIR: str = os.environ.get(
-        "OPENCODE_PROJECT_DIR",
-        str((PROJECT_ROOT / ".opencode").resolve()),
+    OPENCODE_PROJECT_DIR: str = str(
+        Path(
+            os.environ.get(
+                "OPENCODE_PROJECT_DIR",
+                str((PROJECT_ROOT / ".opencode").resolve()),
+            )
+        ).resolve()
     )
 
     # Provider Keys
@@ -70,9 +74,13 @@ class Config:
     # Figma Personal Access Token
     FIGMA_PAT: str = os.environ.get("FIGMA_PAT", "")
 
-    WORKSPACE_DIR: str = os.environ.get(
-        "WORKSPACE_DIR",
-        str((PROJECT_ROOT / "workspace").resolve()),
+    WORKSPACE_DIR: str = str(
+        Path(
+            os.environ.get(
+                "WORKSPACE_DIR",
+                str((PROJECT_ROOT / "workspace").resolve()),
+            )
+        ).resolve()
     )
     MAX_REPAIR_ITERATIONS: int = int(os.environ.get("MAX_REPAIR_ITERATIONS", "3"))
 

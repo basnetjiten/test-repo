@@ -18,7 +18,6 @@ ENV PATH="/opt/flutter/bin:/opt/flutter/bin/cache/dart-sdk/bin:/root/.pub-cache/
 RUN flutter precache --universal
 
 # Install project-specific Dart CLIs
-RUN dart pub global activate --source git https://github.com/basnetjiten/simplex_cli.git
 RUN dart pub global activate intl_utils
 
 

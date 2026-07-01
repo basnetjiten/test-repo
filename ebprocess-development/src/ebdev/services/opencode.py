@@ -114,6 +114,72 @@ def extract_json_block(text: str, job_id: str) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
+# Model resolution helpers
+# ---------------------------------------------------------------------------
+#: Maps known model-string prefixes to their OpenCode providerID.
+_MODEL_PREFIX_MAP: dict[str, str] = {
+    "gpt-": "openai",
+    "o1": "openai",
+    "o3": "openai",
+    "o4": "openai",
+    "claude": "anthropic",
+    "gemini-": "google",
+    "gemma-": "google",
+    "cogito": "ollama",
+    "qwen": "ollama",
+    "codellama": "ollama",
+    "llama": "ollama",
+}
+
+
+def _build_model_payload(model: str | dict[str, Any] | None) -> dict[str, str] | None:
+    """
+    Resolve a model string or dict into an OpenCode ``{providerID, modelID}`` payload.
+
+    Parameters
+    ----------
+    model : str | dict | None
+        The model configuration. If a string with a ``/`` separator, the prefix
+        is used as the providerID directly (e.g. ``"openai/gpt-4o"``). If a plain
+        string, the provider is inferred from the :data:`_MODEL_PREFIX_MAP`. If a
+        ``dict``, it is returned unchanged. ``None`` returns ``None``.
+
+    Returns
+    -------
+    dict[str, str] | None
+        A ``{"providerID": ..., "modelID": ...}`` dict, or ``None`` if unresolvable.
+    """
+    if not model:
+        return None
+
+    if isinstance(model, dict):
+        return model  # type: ignore[return-value]
+
+    model_str = model.strip()
+
+    # Explicit provider/model notation takes priority (e.g. "anthropic/claude-sonnet-4-5")
+    if "/" in model_str:
+        provider_id, model_id = model_str.split("/", 1)
+        return {"providerID": provider_id, "modelID": model_id}
+
+    # Prefix-based auto-detection
+    provider_id = next(
+        (pid for prefix, pid in _MODEL_PREFIX_MAP.items() if model_str.startswith(prefix)),
+        None,
+    )
+    if provider_id:
+        return {"providerID": provider_id, "modelID": model_str}
+
+    logger.warning(
+        "Could not resolve provider ID for model '%s'. "
+        "Omitting model to use server default. "
+        "Use 'provider/model' format (e.g. 'anthropic/claude-sonnet-4-5') to be explicit.",
+        model_str,
+    )
+    return None
+
+
+# ---------------------------------------------------------------------------
 # API Client
 # ---------------------------------------------------------------------------
 class OpenCodeAPIClient:
@@ -168,7 +234,7 @@ class OpenCodeAPIClient:
             return res.json()["id"]
 
     async def send_prompt_message(
-        self, session_id: str, agent: str, prompt: str, model: str | None = None
+        self, session_id: str, agent: str, prompt: str, model: str | dict[str, Any] | None = None
     ) -> dict:
         """
         Post prompt instruction message to execution session and await output.
@@ -181,20 +247,22 @@ class OpenCodeAPIClient:
             The agent role name to dispatch.
         prompt : str
             The prompt message instructions.
-        model : str | None
-            Optional LLM model override name.
+        model : str | dict[str, Any] | None
+            Optional LLM model override name or model configuration object.
 
         Returns
         -------
         dict
             The raw JSON response dictionary.
         """
-        payload = {
+        payload: dict[str, Any] = {
             "agent": agent,
-            "parts": [{"type": "text", "text": prompt}]
+            "parts": [{"type": "text", "text": prompt}],
         }
-        if model:
-            payload["model"] = model
+        resolved_model = _build_model_payload(model)
+        if resolved_model:
+            payload["model"] = resolved_model
+
 
         async with httpx.AsyncClient(timeout=600.0) as client:
             res = await client.post(
@@ -231,14 +299,18 @@ class OpenCodeService:
     """Orchestration service coordinating execution context, prompts and deepagent APIs."""
 
     @staticmethod
-    def write_context(job_context: JobContext) -> Path:
+    def write_context(job_context: JobContext, storage_dir: Path, platform: str = "") -> Path:
         """
-        Serialize JobContext to context.json metadata descriptor in target directory.
+        Serialize JobContext to a platform-prefixed context JSON descriptor in storage_dir/tasks/.
 
         Parameters
         ----------
         job_context : JobContext
             The job configuration context schemas.
+        storage_dir : Path
+            The central .opencode storage directory.
+        platform : str
+            The platform identifier used to prefix the context filename.
 
         Returns
         -------
@@ -250,10 +322,11 @@ class OpenCodeService:
             if url:
                 job_context.ticket.figma_url = url
 
-        tasks_dir = Path(config.OPENCODE_PROJECT_DIR) / "tasks"
+        tasks_dir = storage_dir / "tasks"
         tasks_dir.mkdir(parents=True, exist_ok=True)
 
-        ctx_file = tasks_dir / "context.json"
+        filename = f"{platform}_context.json" if platform else "context.json"
+        ctx_file = tasks_dir / filename
         ctx_file.write_text(job_context.model_dump_json(indent=2, exclude_none=True), encoding="utf-8")
         return ctx_file
 
@@ -299,14 +372,15 @@ class OpenCodeService:
             If session initialization or request dispatching fails.
         """
         agent = cls._resolve_agent(job_context)
+        platform = job_context.platform
+        # Flat central storage: .opencode/ (not per-platform subdirectory)
         storage_dir = Path(config.OPENCODE_PROJECT_DIR)
-        
-        # Setup structural files and directories
-        (storage_dir / "tasks").mkdir(parents=True, exist_ok=True)
-        (storage_dir / "plans").mkdir(parents=True, exist_ok=True)
 
-        cls.write_context(job_context)
-        prompt = prompts.build_prompt(job_context, storage_dir=storage_dir, session_id=session_id)
+        # Ensure tasks directory exists (plans live directly in storage_dir)
+        (storage_dir / "tasks").mkdir(parents=True, exist_ok=True)
+
+        cls.write_context(job_context, storage_dir, platform=platform)
+        prompt = prompts.build_prompt(job_context, storage_dir=storage_dir, session_id=session_id, platform=platform)
 
         server_url = config.OPENCODE_SERVER_URL or DEFAULT_OPENCODE_SERVER_URL
         client = OpenCodeAPIClient(base_url=server_url, api_key=config.OPENCODE_API_KEY)

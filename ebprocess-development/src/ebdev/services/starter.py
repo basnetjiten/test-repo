@@ -34,11 +34,8 @@ TEMPLATES_DIR = Path(__file__).parent.parent.parent / "templates"
 # Internal Helpers
 # ---------------------------------------------------------------------------
 async def _bootstrap_sync(repo_path: str) -> None:
-    """Perform bootstrap synchronization commands: simplex init, pub get, and build_runner."""
+    """Perform bootstrap synchronization commands: pub get and build_runner."""
     logger.info("Starting Bootstrap Sync Sequence...")
-
-    logger.info("Running simplex init --no-interactive...")
-    await flutter_cmd.simplex_init(repo_path)
 
     logger.info("Running flutter pub get...")
     await flutter_cmd.pub_get(repo_path)

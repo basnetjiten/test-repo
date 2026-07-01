@@ -1,47 +1,43 @@
-version: '3.8'
-
 services:
-  # Headless OpenCode deepagent server
-  opencode:
-    image: node:18-slim
-    container_name: ebprocess-opencode
-    command: sh -c "npm install -g opencode-ai && opencode serve --port 4096 --hostname 0.0.0.0"
-    ports:
-      - "4096:4096"
-    volumes:
-      - ./workspace:/workspace
-      - ./.opencode:/root/.config/opencode
-      # Sync GitHub Copilot OAuth token if authenticated on host
-      - ${HOME}/.local/share/opencode:/root/.local/share/opencode
-    environment:
-      - OPENCODE_API_KEY=${OPENCODE_API_KEY}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - GOOGLE_GENERATIVE_AI_API_KEY=${GOOGLE_GENERATIVE_AI_API_KEY}
-      - GROQ_API_KEY=${GROQ_API_KEY}
-    restart: always
 
-  # LangGraph Graph Worker
-  worker:
+  opencode:
     build:
       context: .
-    container_name: ebprocess-worker
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "4096:4096"
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      GOOGLE_GENERATIVE_AI_API_KEY: ${GOOGLE_GENERATIVE_AI_API_KEY}
+      OPENCODE_API_KEY: ${OPENCODE_API_KEY}
+    volumes:
+      - ~/.local/share/opencode:/root/.local/share/opencode:rw
+      - ./workspace:/workspace:rw
+      - ./.opencode:/.opencode:rw
+      - ./.opencode:/root/.config/opencode:rw
+    entrypoint: ["sh", "-c", "opencode serve --port 4096 --hostname 0.0.0.0"]
+
+  # ── ebprocess Orchestration API ──────────────────────────────────────────
+  ebprocess:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
     ports:
       - "8000:8000"
+    env_file: .env
+    environment:
+      # Point to the sibling opencode container by service name
+      OPENCODE_SERVER_URL: http://opencode:4096
+      # Paths inside the container
+      WORKSPACE_DIR: /workspace
+      OPENCODE_PROJECT_DIR: /.opencode
+    volumes:
+      # Same shared volumes so ebprocess can read/write plans and workspaces
+      - ./.opencode:/.opencode
+      - ./workspace:/workspace
     depends_on:
       - opencode
-    volumes:
-      - ./workspace:/workspace
-      - ./.opencode:/app/.opencode
-    environment:
-      - OPENCODE_SERVER_URL=http://opencode:4096
-      - WORKSPACE_DIR=/workspace
-      - OPENCODE_PROJECT_DIR=/workspace/.opencode
-      - POSTGRES_URL=${POSTGRES_URL}
-      - GIT_USER=${GIT_USER}
-      - GIT_TOKEN=${GIT_TOKEN}
-      - GITHUB_TOKEN=${GITHUB_TOKEN}
-      - BITBUCKET_USERNAME=${BITBUCKET_USERNAME}
-      - BITBUCKET_APP_PASSWORD=${BITBUCKET_APP_PASSWORD}
-      - MAX_REPAIR_ITERATIONS=${MAX_REPAIR_ITERATIONS:-3}
-    restart: unless-stopped
+    command: ["langgraph", "dev", "--host", "0.0.0.0", "--port", "8000"]

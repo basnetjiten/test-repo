@@ -77,23 +77,23 @@ async def plan_node(state: GraphState) -> GraphState:
     else:
         # Fallback to standard platform list
         platforms = ctx.platforms
+    # Reset done and failed platform states for the active platforms in the current wave
+    done_platforms = {**state.done_platforms}
+    failed_platforms = {**state.failed_platforms}
+    for p in platforms:
+        done_platforms[p] = False
+        failed_platforms[p] = False
+
     repo_path = Path(ctx.repo_path)
-    
-    plans_dir = Path(config.OPENCODE_PROJECT_DIR) / "plans"
-    plans_dir.mkdir(parents=True, exist_ok=True)
-    
     results: dict[str, JobResult] = {}
     
     # 1. Async Planning Worker Function
     async def plan_single_platform(platform: str) -> tuple[str, JobResult]:
         logger.info("[%s] Running planner...", platform)
         
-        if len(ctx.platforms) > 1:
-            plat_path = repo_path / platform
-            plan_file = plans_dir / f"{platform}_plan.md"
-        else:
-            plat_path = repo_path
-            plan_file = plans_dir / "plan.md"
+        plat_path = repo_path / platform if len(ctx.platforms) > 1 else repo_path
+        plan_file = Path(config.OPENCODE_PROJECT_DIR) / f"{platform}_plan.md"
+        plan_file.parent.mkdir(parents=True, exist_ok=True)
             
         if plan_file.exists():
             plan_file.unlink()
@@ -166,7 +166,9 @@ async def plan_node(state: GraphState) -> GraphState:
         return state.model_copy(update={
             "last_node": "plan",
             "result": consolidated_result,
-            "platform_results": {**state.platform_results, **results}
+            "platform_results": {**state.platform_results, **results},
+            "done_platforms": done_platforms,
+            "failed_platforms": failed_platforms
         })
 
     except Exception as e:

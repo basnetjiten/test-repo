@@ -135,11 +135,13 @@ async def prepare_node(state: GraphState) -> GraphState:
             strategy = get_platform_strategy(platform)
             has_pubspec = (plat_path / "pubspec.yaml").exists()
             has_python = (plat_path / "pyproject.toml").exists() or (plat_path / "requirements.txt").exists()
-            is_existing = has_pubspec or has_python
-
-            if not is_existing and ctx.starter_type:
+            has_node = (plat_path / "package.json").exists()
+            is_existing = has_pubspec or has_python or has_node
+            # Resolve per-platform starter type; fall back to ctx.starter_type if not mapped
+            resolved_starter = ctx.starter_types.get(platform) or ctx.starter_type
+            if not is_existing and resolved_starter:
                 await send_progress(state, f"Bootstrapping {platform} project strategy...")
-                await strategy.bootstrap(plat_path, ctx.starter_type)
+                await strategy.bootstrap(plat_path, resolved_starter)
 
                 # Commit initial setup
                 if git.is_git_repo() and not git.has_commits():

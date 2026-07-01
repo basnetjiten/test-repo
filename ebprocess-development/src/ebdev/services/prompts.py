@@ -3,42 +3,103 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from ebdev.core.constants import Prompts, ErrorMessages
 from ebdev.models.schemas import JobContext
 
 
-def agent_instructions(job_context: JobContext, storage_dir: Path) -> str:
+# ---------------------------------------------------------------------------
+# Platform tech stack registry
+# ---------------------------------------------------------------------------
+PLATFORM_TECH_STACK: dict[str, str] = {
+    "api": (
+        "NestJS (TypeScript) monorepo. "
+        "Key directory patterns:\n"
+        "  - apps/api/src/modules/<feature>/ → controller, service, resolver, module\n"
+        "  - libs/data-access/src/<feature>/ → schema, repository\n"
+        "Use NestJS conventions: decorators, DI, DTOs, Mongoose schemas."
+    ),
+    "flutter": (
+        "Flutter/Dart mobile app. "
+        "Key directory patterns:\n"
+        "  - lib/screens/<feature>/ → screen widgets\n"
+        "  - lib/widgets/ → shared reusable widgets\n"
+        "  - lib/repositories/ → data/mock repositories\n"
+        "  - lib/models/ → data models\n"
+        "Use flutter/dart best practices: StatelessWidget, Provider/BLoC, null safety."
+    ),
+    "web": (
+        "Next.js / React (TypeScript) web app. "
+        "Key directory patterns:\n"
+        "  - src/pages/ or app/ → routes\n"
+        "  - src/components/ → React components\n"
+        "  - src/lib/ → utilities and API clients"
+    ),
+    "cms": (
+        "Payload CMS project. "
+        "Key directory patterns:\n"
+        "  - src/collections/ → collection configs\n"
+        "  - src/fields/ → custom field types"
+    ),
+}
+
+
+def to_container_path(path: Path) -> Path:
+    """
+    Translate host absolute paths to container-native paths.
+    
+    Maps host path prefixes to container mounts:
+      - /Users/.../workspace/... -> /workspace/...
+      - /Users/.../.opencode/...  -> /.opencode/...
+    """
+    path_str = str(path.absolute()).replace("\\", "/")
+    if "/.opencode" in path_str:
+        parts = path_str.split("/.opencode")
+        return Path("/.opencode" + parts[-1])
+    if "/workspace" in path_str:
+        parts = path_str.split("/workspace")
+        return Path("/workspace" + parts[-1])
+    return path
+
+
+
+def agent_instructions(job_context: JobContext, storage_dir: Path, platform: str = "") -> str:
     """Return phase-specific instructions for the active agent."""
     agent = job_context.current_agent.lower()
-    plan_path = storage_dir / "plans" / "plan.md"
+    plat = platform or job_context.platform
+    storage_dir_container = to_container_path(storage_dir)
+    plan_path = storage_dir_container / f"{plat}_plan.md"
+    context_path = storage_dir_container / "tasks" / f"{plat}_context.json"
 
     # Planner instructions
     if "planner" in agent or agent == "plan":
         return f"""<{Prompts.INSTRUCTIONS_TAG}>
 {Prompts.PHASE_PLANNING}
-- GOAL: Create a comprehensive implementation plan based on requirements in context.json.
+- GOAL: Create a comprehensive implementation plan based on requirements in {context_path}.
 - REQUIREMENT: You MUST save the plan to {plan_path}.
 - TOOLS: Use `write_file` or `run_command`.
 - AVOID DUPLICATION: Always search the repository for existing directories and files before defining new ones. Re-use existing patterns instead of scaffolding new code from scratch whenever possible.
+- SKILLS ALIGNMENT: Review the technical guidelines in the `.opencode/skills/` directory for your platform (e.g., Clean Architecture, BaseRepo, state management). Your plan must adopt the exact patterns and folder structures specified in those skills.
 
 <PLAN_EXPECTATIONS>
 Your plan must include:
-1. Impacted files and directories.
-2. Core logic changes.
+1. Impacted files and directories (use the PLATFORM_CONTEXT paths as a guide).
+2. Core logic changes per file.
 3. State management or dependency updates.
 4. Verification steps.
+5. Reference to which allowed skills/architecture patterns are being applied.
 </PLAN_EXPECTATIONS>
 
 EXAMPLE:
-  mkdir -p {storage_dir}/plans && cat << 'PLANEOF' > {plan_path}
+  mkdir -p {storage_dir_container} && cat << 'PLANEOF' > {plan_path}
   # Implementation Plan
   ## Scope
   Brief description...
   ## Changes
-  - file1.dart: Add widget X
-  - file2.dart: Update logic Y
+  - apps/api/src/modules/user/user.service.ts: Add login method
+  - lib/screens/login/login_screen.dart: Create login UI
   PLANEOF
 </{Prompts.INSTRUCTIONS_TAG}>"""
 
@@ -68,12 +129,13 @@ EXAMPLE:
 
     # Builder / Implementer instructions
     else:
-        
         mock_req = ""
         if job_context.mocking_level == "mock_repositories":
             mock_req = "- MOCKING REQUIRED: Isolate network API client calls behind clean repositories. Generate stateful Mock Repository classes with local simulated data to build decoupled, visually interactive screens.\n"
             if job_context.spoq_epic_dir:
-                mock_req += f"- CONTRACT FIRST: You MUST reference the OpenAPI/data models defined in `{job_context.spoq_epic_dir}/tasks/00-contract.yml` (if it exists) to ensure your mock endpoints exactly match the backend contract.\n"
+                repo_path = Path(job_context.repo_path).absolute()
+                rel_spoq = os.path.relpath(Path(job_context.spoq_epic_dir).absolute(), repo_path)
+                mock_req += f"- CONTRACT FIRST: You MUST reference the OpenAPI/data models defined in `{rel_spoq}/tasks/00-contract.yml` (if it exists) to ensure your mock endpoints exactly match the backend contract.\n"
         elif job_context.mocking_level == "ui_stubs":
             mock_req = "- UI STUBS ONLY: Implement visual presentations and UI stubs without full logic/network integration.\n"
 
@@ -81,43 +143,70 @@ EXAMPLE:
         if job_context.offline_first:
             offline_req = "- OFFLINE-FIRST ARCHITECTURE: Enforce local storage as the single source of truth. UI must read from/write to local DB (e.g. Drift/Hive/Isar). Save mutations locally with a 'pending' status and implement queue/sync mechanisms to pull/push server updates.\n"
 
+        repo_path = Path(job_context.repo_path).absolute()
+
         return f"""<{Prompts.INSTRUCTIONS_TAG}>
 {Prompts.PHASE_IMPLEMENTATION}
 
 <REQUIREMENTS>
 - You MUST implement the plan found at {plan_path}
 - If that file does not exist, immediately output: {{"status": "error", "reason": "{ErrorMessages.PLAN_MISSING.format(plan_path=plan_path)}"}} and stop.
+- CRITICAL: You MUST anchor all commands and file operations in the repository workspace. Run `cd {repo_path}` before editing, creating files or running compilation/test tools.
 - Edit or write files under the repository workspace directory to implement the plan.
+- You MUST create or edit at least one source file inside the repository (e.g. inside `lib/`, `src/`, `apps/`, or `libs/`). Writing only to plan or metadata files does NOT count.
+- SKILLS COMPLIANCE: Review the guidelines in the `.opencode/skills/` directory for your platform (e.g., repository interfaces, remote sources, freezed models, state management, or BaseRepo patterns). You MUST strictly follow the structural rules, file locations, coding patterns, and naming conventions defined in those skills.
 {mock_req}{offline_req}</REQUIREMENTS>
 
+<SUBAGENT_DELEGATION>
+You have access to specialized subagents to delegate verification and refining tasks. You can run them using subagent task tools:
+1. **Linter** (`linter`): Run this subagent to verify formatting and fix static analysis errors on your changed files.
+2. **Contract Verifier** (`contract_verifier`): Run this subagent to verify that API schemas, models, and endpoints match perfectly across Web and Flutter code.
+3. **UI Refiner** (`ui_refiner`): Run this subagent to polish styling, spacing, and design system tokens on visual layouts.
+</SUBAGENT_DELEGATION>
+
 <VERIFICATION_PROTOCOL>
-1. Before finishing, run `git status` to verify files under the repository workspace have changed.
-2. If no files have changed, you have FAILED.
-3. Before declaring success, search for any "TODO" tags and ensure they are addressed.
+1. Before finishing, run `git status` or inspect the file system (e.g. via `ls` or `find`) to verify files under the repository workspace have changed.
+2. If `git` is unavailable on the system, verify file existence manually. If no files have changed, you have FAILED. Create the missing files and try again.
+3. Delegate verification tasks to the relevant subagent (e.g. run the `linter` subagent to analyze your changes) before completing.
+4. Before declaring success, search for any "TODO" tags and ensure they are addressed.
 </VERIFICATION_PROTOCOL>
 </{Prompts.INSTRUCTIONS_TAG}>"""
 
 
 def build_prompt(
-    job_context: JobContext, storage_dir: Path, session_id: str | None = None
+    job_context: JobContext,
+    storage_dir: Path,
+    session_id: str | None = None,
+    platform: str = "",
 ) -> str:
     """Return the full hydrated prompt instructions for the active agent."""
-    repo_dir = Path(job_context.repo_path).absolute()
+    repo_dir = to_container_path(Path(job_context.repo_path))
+    storage_dir_container = to_container_path(storage_dir)
+    plat = platform or job_context.platform
     session_line = f"\n- SESSION_ID  = {session_id}" if session_id else ""
+
+    # Resolve platform tech stack hints
+    tech_stack = PLATFORM_TECH_STACK.get(plat, f"Platform: {plat}")
 
     return f"""<{Prompts.ROLE_TAG}>
 Execute your role as the {job_context.current_agent} for job {job_context.ticket_id}.
 </{Prompts.ROLE_TAG}>
 
 <{Prompts.ENV_TAG}>
-- STORAGE_DIR = {storage_dir}
-- REPO_DIR    = {repo_dir}{session_line}
+- PLATFORM     = {plat}
+- STORAGE_DIR  = {storage_dir_container}
+- REPO_DIR     = {repo_dir}{session_line}
 </{Prompts.ENV_TAG}>
 
+<PLATFORM_CONTEXT>
+{tech_stack}
+</PLATFORM_CONTEXT>
+
 <{Prompts.PATHS_TAG}>
-- Centralized Metadata: {storage_dir}
+- Centralized Metadata: {storage_dir_container}
 - Repository Workspace: {repo_dir} (All code changes MUST happen here)
-- Requirements File:   {storage_dir}/tasks/context.json
+- Requirements File:    {storage_dir_container}/tasks/{plat}_context.json
+- Implementation Plan:  {storage_dir_container}/{plat}_plan.md
 </{Prompts.PATHS_TAG}>
 
 <{Prompts.POLICY_TAG}>
@@ -128,7 +217,7 @@ ZERO-QUESTION POLICY:
 - If an issue is truly unresolvable, document it in your final JSON status. Do NOT halt execution to ask a question.
 </{Prompts.POLICY_TAG}>
 
-{agent_instructions(job_context, storage_dir)}
+{agent_instructions(job_context, storage_dir, platform=plat)}
 
 <{Prompts.FINAL_INSTRUCTION_TAG}>
 - Do NOT explain your steps in chat.

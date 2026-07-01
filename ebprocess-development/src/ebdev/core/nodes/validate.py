@@ -125,14 +125,22 @@ async def validate_node(state: GraphState) -> GraphState:
         next_stage = state.current_stage
         stages_finished = True
         
-        if all_passed and not is_spoq and state.strategy and state.strategy.stages:
-            if state.current_stage < len(state.strategy.stages) - 1:
-                next_stage = state.current_stage + 1
-                stages_finished = False
+        if all_passed:
+            if is_spoq and ctx.spoq_epic_dir is not None:
+                from ebdev.core.spoq_utils import get_spoq_tasks
+                all_tasks = get_spoq_tasks(ctx.spoq_epic_dir)
+                remaining = [t for t in all_tasks if t["status"] in ["pending", "blocked"]]
+                active_ids = {t["id"] for t in active_tasks}
+                real_remaining = [t for t in remaining if t["id"] not in active_ids]
+                stages_finished = not real_remaining
+            elif not is_spoq and state.strategy and state.strategy.stages:
+                if state.current_stage < len(state.strategy.stages) - 1:
+                    next_stage = state.current_stage + 1
+                    stages_finished = False
 
         status_msg = "All validations passed." if all_passed else f"Validation failed with {len(combined_errors)} check errors. Repair needed."
         if all_passed and not stages_finished:
-            status_msg = f"Stage {state.current_stage + 1} passed. Advancing to stage {next_stage + 1}..."
+            status_msg = f"Stage {state.current_stage + 1} passed. Advancing to next stage..."
         await send_progress(state, status_msg)
 
         # Update context validation errors

@@ -221,22 +221,3 @@ async def build_runner(
         output=output,
         timeout=timeout,
     )
-
-
-async def simplex_init(cwd: str, output: Optional[list[str]] = None) -> bool:
-    """
-    Run `simplex init --no-interactive`.
-
-    Parameters
-    ----------
-    cwd : str
-        Working directory path.
-    output : list[str] | None
-        Optional buffer to collect logs.
-
-    Returns
-    -------
-    bool
-        True if successful.
-    """
-    return await run_cmd(["simplex", "init", "--no-interactive"], cwd=cwd, output=output)

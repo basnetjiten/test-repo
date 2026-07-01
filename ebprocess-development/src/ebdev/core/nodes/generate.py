@@ -83,7 +83,6 @@ async def generate_node(state: GraphState) -> GraphState:
         logger.info("Skipping due to plan failure.")
         return state.model_copy(update={"last_node": "generate"})
 
-    plans_dir = Path(config.OPENCODE_PROJECT_DIR) / "plans"
     results: dict[str, JobResult] = {}
     session_ids: dict[str, str] = {**state.opencode_session_ids}
 
@@ -103,13 +102,8 @@ async def generate_node(state: GraphState) -> GraphState:
             )
             return platform, existing_result, session_ids.get(platform)
         
-        # Verify plan file exists
-        if len(ctx.platforms) > 1:
-            plat_path = repo_path / platform
-            plan_file = plans_dir / f"{platform}_plan.md"
-        else:
-            plat_path = repo_path
-            plan_file = plans_dir / "plan.md"
+        plat_path = repo_path / platform if len(ctx.platforms) > 1 else repo_path
+        plan_file = Path(config.OPENCODE_PROJECT_DIR) / f"{platform}_plan.md"
 
         if not plan_file.exists():
             err_result = JobResult(

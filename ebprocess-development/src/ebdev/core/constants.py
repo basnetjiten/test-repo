@@ -4,11 +4,13 @@
 
 class Agents:
     """Standard agent names."""
+    ORCHESTRATOR = "multi_agent_orchestrator"
     FLUTTER_PLANNER = "flutter_planner"
     FLUTTER_BUILDER = "flutter_builder"
     UI_REFINER = "ui_refiner"
     BUG_FIXER = "bug_fixer"
     FIGMA_ASSETS = "@figma_assets"
+
 
 
 class Commands:

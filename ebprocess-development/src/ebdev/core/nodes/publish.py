@@ -94,18 +94,38 @@ async def publish_node(state: GraphState) -> GraphState:
             else:
                 commit_msg = f"feat: [{ctx.ticket.id}] {ctx.feature_name} ({platform})"
                 await asyncio.to_thread(git.commit_all, commit_msg)
-                await asyncio.to_thread(git.push, branch_name, repo_url)
+                
+                # Resolve platform-specific repo URL
+                plat_repo_url = repo_url
+                if plat_repo_url and len(platforms) > 1:
+                    clean_url = plat_repo_url.strip().replace(".git", "")
+                    if f"-{platform}" not in clean_url and f"_{platform}" not in clean_url:
+                        if plat_repo_url.endswith(".git"):
+                            plat_repo_url = plat_repo_url[:-4] + f"-{platform}.git"
+                        else:
+                            plat_repo_url = plat_repo_url + f"-{platform}"
+                await asyncio.to_thread(git.push, branch_name, plat_repo_url)
+
+        # Resolve platform-specific repo URL
+        plat_repo_url = repo_url
+        if plat_repo_url and len(platforms) > 1:
+            clean_url = plat_repo_url.strip().replace(".git", "")
+            if f"-{platform}" not in clean_url and f"_{platform}" not in clean_url:
+                if plat_repo_url.endswith(".git"):
+                    plat_repo_url = plat_repo_url[:-4] + f"-{platform}.git"
+                else:
+                    plat_repo_url = plat_repo_url + f"-{platform}"
 
         # Create Pull Request
         pr_url = None
-        if repo_url:
-            platform_type = "github" if "github.com" in repo_url.lower() else "bitbucket"
+        if plat_repo_url:
+            platform_type = "github" if "github.com" in plat_repo_url.lower() else "bitbucket"
             await send_progress(state, f"[{platform}] Creating Pull Request on {platform_type.capitalize()}...")
             
             if platform_type == "github":
-                pr_url = await asyncio.to_thread(_create_github_pr, ctx, branch_name)
+                pr_url = await asyncio.to_thread(_create_github_pr, ctx, branch_name, plat_repo_url)
             else:
-                pr_url = await asyncio.to_thread(_create_bitbucket_pr, ctx, branch_name)
+                pr_url = await asyncio.to_thread(_create_bitbucket_pr, ctx, branch_name, plat_repo_url)
 
         return pr_url
 
@@ -131,16 +151,12 @@ async def publish_node(state: GraphState) -> GraphState:
                 )
             await send_progress(state, f"Job Successful: PR Created at {primary_pr}")
 
-        # Cleanup plan files concurrently
-        plans_dir = Path(config.OPENCODE_PROJECT_DIR) / "plans"
-        for p in platforms:
-            if len(platforms) > 1:
-                plan_file = plans_dir / f"{p}_plan.md"
-            else:
-                plan_file = plans_dir / "plan.md"
-            if plan_file.exists():
-                plan_file.unlink()
-                logger.info("Cleanup: Removed plan %s", plan_file.name)
+        # Keep plan files for developer review as requested
+        # for p in platforms:
+        #     plan_file = Path(config.OPENCODE_PROJECT_DIR) / f"{p}_plan.md"
+        #     if plan_file.exists():
+        #         plan_file.unlink()
+        #         logger.info("Cleanup: Removed plan %s", plan_file)
 
         return state.model_copy(update={
             "last_node": "publish",
@@ -156,7 +172,7 @@ async def publish_node(state: GraphState) -> GraphState:
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
-def _create_bitbucket_pr(ctx, branch_name: str) -> str | None:
+def _create_bitbucket_pr(ctx, branch_name: str, repo_url: str | None = None) -> str | None:
     """
     Invoke Bitbucket API to create a PR.
 
@@ -166,13 +182,16 @@ def _create_bitbucket_pr(ctx, branch_name: str) -> str | None:
         The current execution context.
     branch_name : str
         The branch name to merge from.
+    repo_url : str | None
+        Optional repository URL override.
 
     Returns
     -------
     str | None
         The HTML URL of the created PR, or None if creation failed or skipped.
     """
-    repo_url = ctx.project_repo or config.BITBUCKET_REPO_URL
+    if not repo_url:
+        repo_url = ctx.project_repo or config.BITBUCKET_REPO_URL
     if not repo_url:
         return None
 
@@ -217,7 +236,7 @@ def _create_bitbucket_pr(ctx, branch_name: str) -> str | None:
         return None
 
 
-def _create_github_pr(ctx, branch_name: str) -> str | None:
+def _create_github_pr(ctx, branch_name: str, repo_url: str | None = None) -> str | None:
     """
     Invoke GitHub API to create a PR.
 
@@ -227,13 +246,16 @@ def _create_github_pr(ctx, branch_name: str) -> str | None:
         The current execution context.
     branch_name : str
         The branch name to merge from.
+    repo_url : str | None
+        Optional repository URL override.
 
     Returns
     -------
     str | None
         The HTML URL of the created PR, or None if creation failed or skipped.
     """
-    repo_url = ctx.project_repo or config.GITHUB_REPO_URL if hasattr(config, "GITHUB_REPO_URL") else ctx.project_repo
+    if not repo_url:
+        repo_url = ctx.project_repo or config.GITHUB_REPO_URL if hasattr(config, "GITHUB_REPO_URL") else ctx.project_repo
     if not repo_url:
         return None
 
