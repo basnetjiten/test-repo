@@ -202,18 +202,20 @@ class GitService:
                 self._run(["remote", "remove", "origin"])
                 self._run(["remote", "add", "origin", target_clone_url])
 
-                max_retries = 5
+                max_retries = 2
                 for i in range(max_retries):
                     try:
                         self._run(["push", "-u", "origin", "--all"])
                         break
                     except subprocess.CalledProcessError as e:
                         if i == max_retries - 1:
-                            raise GitServiceError(
-                                f"Failed to push to remote after {max_retries} attempts: {e.stderr}"
-                            ) from e
-                        logger.warning("Push failed, retrying in 5s... (%s/%s)", i+1, max_retries)
-                        time.sleep(5)
+                            logger.warning(
+                                "Pushing to remote failed, continuing locally since remote operations are secondary: %s",
+                                e.stderr or e.stdout
+                            )
+                        else:
+                            logger.warning("Push failed, retrying in 5s... (%s/%s)", i+1, max_retries)
+                            time.sleep(5)
                 log.append(f"Seeded repository with {starter_kit_url}")
             else:
                 self.repo_path.mkdir(parents=True, exist_ok=True)

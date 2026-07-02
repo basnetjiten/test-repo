@@ -30,12 +30,12 @@ async def run_test():
     # Initialize JobContext running BOTH platforms (sequential stage planning will run api, then flutter)
     context = JobContext(
         job_id="job_epic_101",
-        space_name="development_space",
+        space_name="ebmobileapp",   # real project space → workspace/ebmobileapp/
         ticket_id="EPIC-101",
         ticket=ticket,
-        repo_path=str(Path(__file__).resolve().parent / "mock_repo"),
+        repo_path=str(Path(config.WORKSPACE_DIR) / "ebmobileapp"),
         platforms=["flutter", "api"],
-        current_agent="plan"
+        current_agent="plan",
     )
 
     # Initialize initial state
@@ -55,10 +55,9 @@ async def run_test():
             progress_callback(f"Running mock actions for {platform}")
             
         if "plan" in agent:
-            # Create platform-specific mock plan file directly in .opencode/ (flat layout)
-            plan_file = Path(config.OPENCODE_PROJECT_DIR) / f"{platform}_plan.md"
-            plan_file.parent.mkdir(parents=True, exist_ok=True)
-                
+            # Write plan file into project-scoped storage: .opencode/<space_name>/<platform>_plan.md
+            storage = ctx.project_storage_dir(config.OPENCODE_PROJECT_DIR)
+            plan_file = storage / f"{platform}_plan.md"
             plan_content = (
                 f"# Implementation Plan - {platform.upper()}\n\n"
                 "## Scope\n"

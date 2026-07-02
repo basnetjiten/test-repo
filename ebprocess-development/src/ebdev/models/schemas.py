@@ -69,6 +69,21 @@ class JobContext(BaseModel):
     branch: str = "main"
     project_repo: Optional[str] = None
     starter_kit_url: Optional[str] = None
+    # Per-platform starter kit source repositories.
+    # TODO: In the future, pull these from remote Bitbucket repositories:
+    # starter_kit_urls: Dict[str, str] = Field(
+    #     default_factory=lambda: {
+    #         "api": "https://bitbucket.org/workspace/ebthemes-api.git",
+    #         "flutter": "https://bitbucket.org/workspace/flutterkit.git",
+    #     }
+    # )
+    # For now, pulling from local Desktop/starterkit paths as requested:
+    starter_kit_urls: Dict[str, str] = Field(
+        default_factory=lambda: {
+            "api": "/Users/ebpearls/Desktop/starterkit/ebthemes-api",
+            "flutter": "/Users/ebpearls/Desktop/starterkit/flutterkit",
+        }
+    )
     starter_type: Optional[str] = None
     # Per-platform scaffold types. e.g. {"api": "nestjs", "flutter": "flutter"}
     starter_types: Dict[str, str] = Field(

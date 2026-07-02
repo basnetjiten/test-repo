@@ -115,8 +115,12 @@ async def prepare_node(state: GraphState) -> GraphState:
                 if not repo_exists:
                     logger.warning("[%s] Remote repository setup returned error for %s", platform, plat_repo_url)
 
+                # TODO: In the future, pull these from remote Bitbucket repositories.
+                # For now, resolve per-platform starter kit URL, falling back to ctx.starter_kit_url.
+                resolved_starter_kit = ctx.starter_kit_urls.get(platform) or ctx.starter_kit_url
+
                 # Clone or Fetch using the platform repo URL
-                await asyncio.to_thread(git.clone_or_fetch, plat_repo_url, ctx.starter_kit_url)
+                await asyncio.to_thread(git.clone_or_fetch, plat_repo_url, resolved_starter_kit)
 
             # Sanitized branch checkout
             sanitized_feature = _sanitize_branch_name(ctx.feature_name or ctx.ticket.title)

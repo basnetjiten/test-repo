@@ -45,12 +45,12 @@ async def run_test():
     # Initialize a SprintTicket
     ticket = SprintTicket(
         id="EPIC-102",
-        title="Implement User Login Flow",
-        description="Implement user authentication using username and password.",
+        title="Create Enquiry Page",
+        description="Create an enquiry page with a form containing title and description fields, and a submit button.",
         status="To Do",
         acceptance_criteria=[
-            "Flutter login form includes username and password validation",
-            "API backend exposes a POST /login endpoint that accepts username/password"
+            "Flutter frontend includes form with title and description fields",
+            "API backend exposes a POST /enquiry endpoint to accept and save enquiries"
         ],
         figma_url=None
     )
@@ -58,7 +58,7 @@ async def run_test():
     # Initialize JobContext running BOTH platforms in workspace directory
     context = JobContext(
         job_id="job_epic_102",
-        space_name="development_space",
+        space_name="ebmobileapp",
         ticket_id="EPIC-102",
         ticket=ticket,
         repo_path=str(workspace_dir),
@@ -85,8 +85,9 @@ async def run_test():
             progress_callback(f"Running mock actions for {platform}")
             
         if "plan" in agent:
-            # Create platform-specific mock plan file directly in .opencode/ (flat layout)
-            plan_file = opencode_dir / f"{platform}_plan.md"
+            # Create platform-specific mock plan file in the project storage directory
+            storage = ctx.project_storage_dir(config.OPENCODE_PROJECT_DIR)
+            plan_file = storage / f"{platform}_plan.md"
             plan_content = (
                 f"# Implementation Plan - {platform.upper()}\n\n"
                 "## Scope\n"
@@ -96,7 +97,7 @@ async def run_test():
 
             # Write platform-prefixed context.json using the real write_context method
             from ebdev.services.opencode import OpenCodeService
-            OpenCodeService.write_context(ctx, opencode_dir, platform=platform)
+            OpenCodeService.write_context(ctx, storage, platform=platform)
             
             return JobResult(
                 job_id=ctx.ticket_id,
@@ -187,10 +188,11 @@ async def run_test():
 
         # Assertions for central .opencode/ folder contents
         for platform in ["api", "flutter"]:
-            # 1. Check context file exists in .opencode/tasks/<platform>_context.json
-            context_file = opencode_dir / "tasks" / f"{platform}_context.json"
+            # 1. Check context file exists in .opencode/<space_name>/tasks/<platform>_context.json
+            project_opencode_dir = opencode_dir / context.space_name
+            context_file = project_opencode_dir / "tasks" / f"{platform}_context.json"
             assert context_file.exists(), f"Expected context file {context_file} to exist."
-            print(f"[PASSED] Verified .opencode/tasks/{platform}_context.json exists.")
+            print(f"[PASSED] Verified .opencode/{context.space_name}/tasks/{platform}_context.json exists.")
 
             # 2. Check workspace directories are populated and contain NO .opencode metadata folder
             plat_workspace = workspace_dir / platform
@@ -202,7 +204,7 @@ async def run_test():
             print(f"[PASSED] Verified no .opencode directory inside {plat_workspace}")
 
         # Assertions for SPOQ Active Epics directory
-        spoq_epic_dir = opencode_dir / "spoq" / "epics" / "active" / ticket.id
+        spoq_epic_dir = opencode_dir / context.space_name / "spoq" / "epics" / "active" / ticket.id
         assert spoq_epic_dir.exists(), f"Expected SPOQ epic folder {spoq_epic_dir} to exist."
         assert (spoq_epic_dir / "tasks").exists(), "Expected SPOQ tasks folder to exist."
         assert (spoq_epic_dir / "EPIC.md").exists(), "Expected SPOQ EPIC.md to exist."

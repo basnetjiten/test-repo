@@ -17,18 +17,18 @@ PLATFORM_TECH_STACK: dict[str, str] = {
     "api": (
         "NestJS (TypeScript) monorepo. "
         "Key directory patterns:\n"
-        "  - apps/api/src/modules/<feature>/ → controller, service, resolver, module\n"
-        "  - libs/data-access/src/<feature>/ → schema, repository\n"
-        "Use NestJS conventions: decorators, DI, DTOs, Mongoose schemas."
+        "  - libs/data-access/src/<feature>/ → schema, repository (Must extend BaseRepo and be registered in dataAccessModels/data-access.module.ts)\n"
+        "  - apps/api/src/modules/<feature>/ → controller, service, resolver, module (Registered in apps/api/src/app.module.ts)\n"
+        "Use NestJS decorators (@Schema, @Prop, @InjectModel, @Injectable), DI, DTOs, and repositories extending BaseRepo."
     ),
     "flutter": (
         "Flutter/Dart mobile app. "
         "Key directory patterns:\n"
-        "  - lib/screens/<feature>/ → screen widgets\n"
-        "  - lib/widgets/ → shared reusable widgets\n"
-        "  - lib/repositories/ → data/mock repositories\n"
-        "  - lib/models/ → data models\n"
-        "Use flutter/dart best practices: StatelessWidget, Provider/BLoC, null safety."
+        "  - lib/features/<feature>/domain/ → entities, repositories, usecases\n"
+        "  - lib/features/<feature>/data/ → models, repositories, datasources\n"
+        "  - lib/features/<feature>/presentation/ → pages, cubit, widgets\n"
+        "Use Clean Architecture. Repositories must return EitherResponse<T> and call processApiCall/handleAPICall.\n"
+        "CRITICAL: Write ONLY valid Dart code. NEVER output Java, Kotlin, or Swift."
     ),
     "web": (
         "Next.js / React (TypeScript) web app. "
@@ -77,11 +77,11 @@ def agent_instructions(job_context: JobContext, storage_dir: Path, platform: str
     if "planner" in agent or agent == "plan":
         return f"""<{Prompts.INSTRUCTIONS_TAG}>
 {Prompts.PHASE_PLANNING}
-- GOAL: Create a comprehensive implementation plan based on requirements in {context_path}.
+- GOAL: Create a comprehensive implementation plan based on the requirements in {context_path}.
 - REQUIREMENT: You MUST save the plan to {plan_path}.
-- TOOLS: Use `write_file` or `run_command`.
-- AVOID DUPLICATION: Always search the repository for existing directories and files before defining new ones. Re-use existing patterns instead of scaffolding new code from scratch whenever possible.
-- SKILLS ALIGNMENT: Review the technical guidelines in the `.opencode/skills/` directory for your platform (e.g., Clean Architecture, BaseRepo, state management). Your plan must adopt the exact patterns and folder structures specified in those skills.
+- REQUIRED ACTION: Call the `write` tool with `filePath` set to '{plan_path}' and `content` set to your generated plan markdown.
+- CRITICAL CONSTRAINT: Do NOT print the plan content in your chat response. Your chat response must contain ONLY the final JSON block. You MUST write the plan to the file using the `write` tool first, then output the final JSON block.
+- CRITICAL REQUIREMENT: In your very first step, you MUST use the `read` tool to inspect the guidelines inside the `/.opencode/skills/` directory for your platform (e.g., read `/.opencode/skills/api-scaffolder/SKILL.md` for NestJS/api or `/.opencode/skills/feature-scaffolder/SKILL.md` for Flutter). Your plan MUST strictly adopt the exact folder paths, base classes (e.g., `BaseRepo`), and structural layers defined in those guidelines. If your plan fails to use these paths and patterns, you have FAILED.
 
 <PLAN_EXPECTATIONS>
 Your plan must include:
@@ -93,14 +93,15 @@ Your plan must include:
 </PLAN_EXPECTATIONS>
 
 EXAMPLE:
-  mkdir -p {storage_dir_container} && cat << 'PLANEOF' > {plan_path}
-  # Implementation Plan
-  ## Scope
-  Brief description...
-  ## Changes
-  - apps/api/src/modules/user/user.service.ts: Add login method
-  - lib/screens/login/login_screen.dart: Create login UI
-  PLANEOF
+  Call the `write` tool with:
+  filePath: {plan_path}
+  content:
+    # Implementation Plan
+    ## Scope
+    Brief description...
+    ## Changes
+    - apps/api/src/modules/user/user.service.ts: Add login method
+    - lib/screens/login/login_screen.dart: Create login UI
 </{Prompts.INSTRUCTIONS_TAG}>"""
 
     # Bug fixer instructions
@@ -143,7 +144,7 @@ EXAMPLE:
         if job_context.offline_first:
             offline_req = "- OFFLINE-FIRST ARCHITECTURE: Enforce local storage as the single source of truth. UI must read from/write to local DB (e.g. Drift/Hive/Isar). Save mutations locally with a 'pending' status and implement queue/sync mechanisms to pull/push server updates.\n"
 
-        repo_path = Path(job_context.repo_path).absolute()
+        repo_path = to_container_path(Path(job_context.repo_path))
 
         return f"""<{Prompts.INSTRUCTIONS_TAG}>
 {Prompts.PHASE_IMPLEMENTATION}
@@ -151,6 +152,7 @@ EXAMPLE:
 <REQUIREMENTS>
 - You MUST implement the plan found at {plan_path}
 - If that file does not exist, immediately output: {{"status": "error", "reason": "{ErrorMessages.PLAN_MISSING.format(plan_path=plan_path)}"}} and stop.
+- CRITICAL: You MUST use absolute paths starting with '{repo_path}/' for all file operations in the `write`, `read`, `edit`, `grep`, and `glob` tools. Do NOT use relative paths (e.g., use '{repo_path}/lib/main.dart' instead of 'lib/main.dart') in tool arguments, as relative paths will resolve to the incorrect default directory (/app).
 - CRITICAL: You MUST anchor all commands and file operations in the repository workspace. Run `cd {repo_path}` before editing, creating files or running compilation/test tools.
 - Edit or write files under the repository workspace directory to implement the plan.
 - You MUST create or edit at least one source file inside the repository (e.g. inside `lib/`, `src/`, `apps/`, or `libs/`). Writing only to plan or metadata files does NOT count.
@@ -160,8 +162,7 @@ EXAMPLE:
 <SUBAGENT_DELEGATION>
 You have access to specialized subagents to delegate verification and refining tasks. You can run them using subagent task tools:
 1. **Linter** (`linter`): Run this subagent to verify formatting and fix static analysis errors on your changed files.
-2. **Contract Verifier** (`contract_verifier`): Run this subagent to verify that API schemas, models, and endpoints match perfectly across Web and Flutter code.
-3. **UI Refiner** (`ui_refiner`): Run this subagent to polish styling, spacing, and design system tokens on visual layouts.
+2. **UI Refiner** (`ui_refiner`): Run this subagent to polish styling, spacing, and design system tokens on visual layouts.
 </SUBAGENT_DELEGATION>
 
 <VERIFICATION_PROTOCOL>
@@ -213,6 +214,7 @@ Execute your role as the {job_context.current_agent} for job {job_context.ticket
 ZERO-QUESTION POLICY:
 - You are an AUTONOMOUS AGENT. You MUST NOT ask the user for clarification, permission, or technical help.
 - Conversational questions (e.g., "Should I...?", "Would you like me to...?") are STRICTLY FORBIDDEN.
+- NEVER halt execution to ask interactive questions about file paths, configuration, or file creation. You must make technical decisions autonomously.
 - If you encounter a missing file, a broken dependency, or a compilation error, you MUST attempt to RESOLVE it yourself using your tools.
 - If an issue is truly unresolvable, document it in your final JSON status. Do NOT halt execution to ask a question.
 </{Prompts.POLICY_TAG}>

@@ -112,9 +112,16 @@ class FlutterStrategy(PlatformStrategy):
         """
         logger.info("Bootstrapping Flutter template in %s", repo_path)
         output_lines: list[str] = []
-
-        if not await flutter_cmd.create(str(repo_path), output=output_lines):
+        project_name = repo_path.parent.name.replace("-", "_")
+        if not await flutter_cmd.create(str(repo_path), project_name=project_name, output=output_lines):
             raise PlatformStrategyError("Failed to scaffold Flutter project template.")
+
+        # Fix SDK version constraint and verify package name in pubspec.yaml
+        pubspec_file = repo_path / "pubspec.yaml"
+        if pubspec_file.exists():
+            content = pubspec_file.read_text(encoding="utf-8")
+            content = content.replace("sdk: ^3.11.3", "sdk: ^3.11.0")
+            pubspec_file.write_text(content, encoding="utf-8")
 
         # Sync/bootstrap actions
         await flutter_cmd.pub_get(str(repo_path), output=output_lines)
