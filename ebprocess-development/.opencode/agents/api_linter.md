@@ -17,7 +17,7 @@ You are the final analysis pass for the touched API backend code slice.
 ## Workflow
 1. Run ESLint checks or Prettier formatting on the changed NestJS files:
    ```bash
-   npm run lint
+   ESLINT_USE_FLAT_CONFIG=false npm run lint
    ```
 2. Identify and fix concrete syntax, formatting, or compiler warnings.
 3. Re-run validation checks after corrections.

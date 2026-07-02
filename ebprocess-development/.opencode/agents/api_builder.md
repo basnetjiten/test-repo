@@ -55,7 +55,7 @@ Invoke only the subagents whose layers appear in the plan. Refer to them by name
      ```
    - Check lint formatting:
      ```bash
-     npm run lint
+     ESLINT_USE_FLAT_CONFIG=false npm run lint
      ```
 
 ## Output Formatting
