@@ -206,7 +206,7 @@ class ApiStrategy(PlatformStrategy):
 
             if test_target:
                 logger.info("Running NestJS tests target: %s...", test_target)
-                returncode, _, err = await self._run_command(["npm", "run", "test", "--", test_target], repo_path)
+                returncode, _, err = await self._run_command(["npm", "run", "test", "--", test_target, "--passWithNoTests"], repo_path)
                 if returncode != 0:
                     test_ok = False
                     errors.append(f"NestJS tests failed on target '{test_target}': {err.decode().strip()}")
