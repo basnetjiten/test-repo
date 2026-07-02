@@ -130,12 +130,13 @@ EXAMPLE:
 
     # Builder / Implementer instructions
     else:
+        import os
         mock_req = ""
         if job_context.mocking_level == "mock_repositories":
             mock_req = "- MOCKING REQUIRED: Isolate network API client calls behind clean repositories. Generate stateful Mock Repository classes with local simulated data to build decoupled, visually interactive screens.\n"
             if job_context.spoq_epic_dir:
-                repo_path = Path(job_context.repo_path).absolute()
-                rel_spoq = os.path.relpath(Path(job_context.spoq_epic_dir).absolute(), repo_path)
+                repo_path_abs = Path(job_context.repo_path).absolute()
+                rel_spoq = os.path.relpath(Path(job_context.spoq_epic_dir).absolute(), repo_path_abs)
                 mock_req += f"- CONTRACT FIRST: You MUST reference the OpenAPI/data models defined in `{rel_spoq}/tasks/00-contract.yml` (if it exists) to ensure your mock endpoints exactly match the backend contract.\n"
         elif job_context.mocking_level == "ui_stubs":
             mock_req = "- UI STUBS ONLY: Implement visual presentations and UI stubs without full logic/network integration.\n"
@@ -145,6 +146,37 @@ EXAMPLE:
             offline_req = "- OFFLINE-FIRST ARCHITECTURE: Enforce local storage as the single source of truth. UI must read from/write to local DB (e.g. Drift/Hive/Isar). Save mutations locally with a 'pending' status and implement queue/sync mechanisms to pull/push server updates.\n"
 
         repo_path = to_container_path(Path(job_context.repo_path))
+
+        # Build subagent delegation list dynamically based on platform
+        if plat == "flutter":
+            subagent_delegation = (
+                "You have access to specialized subagents to delegate code implementation and validation tasks. You can run them using subagent task tools:\n"
+                "1. **Domain Subagent** (`flutter_domain`): Implement domain entities and repository interfaces.\n"
+                "2. **Data Subagent** (`flutter_data`): Implement remote/local data sources, models, and repository implementations.\n"
+                "3. **State Subagent** (`flutter_state`): Implement cubit/bloc state management implementation.\n"
+                "4. **UI Subagent** (`flutter_ui`): Implement page screens, widget layouts, and forms.\n"
+                "5. **UI Refiner** (`flutter_ui_refiner`): Polishes visual layout styles and design system tokens.\n"
+                "6. **Linter** (`flutter_linter`): Run this to fix static analysis issues on changed files."
+            )
+            linter_ref = "flutter_linter"
+        elif plat == "api":
+            subagent_delegation = (
+                "You have access to specialized subagents to delegate code implementation and validation tasks. You can run them using subagent task tools:\n"
+                "1. **Schema Builder** (`api_schema_builder`): Implement mongoose schemas, models, and data-access repositories.\n"
+                "2. **DTO Generator** (`api_dto_generator`): Implement REST DTOs and GraphQL types.\n"
+                "3. **Service Builder** (`api_service_builder`): Implement business logic services.\n"
+                "4. **Route Builder** (`api_route_builder`): Implement REST controllers and GraphQL resolvers.\n"
+                "5. **Module Integrator** (`api_module_integrator`): Implement module wiring and dependency registrations.\n"
+                "6. **Linter** (`api_linter`): Run this to fix linting and compilation errors on changed files."
+            )
+            linter_ref = "api_linter"
+        else:
+            subagent_delegation = (
+                "You have access to specialized subagents to delegate verification and refining tasks. You can run them using subagent task tools:\n"
+                "1. **Linter** (`linter`): Run this subagent to verify formatting and fix static analysis errors on your changed files.\n"
+                "2. **UI Refiner** (`ui_refiner`): Run this subagent to polish styling, spacing, and design system tokens on visual layouts."
+            )
+            linter_ref = "linter"
 
         return f"""<{Prompts.INSTRUCTIONS_TAG}>
 {Prompts.PHASE_IMPLEMENTATION}
@@ -160,15 +192,13 @@ EXAMPLE:
 {mock_req}{offline_req}</REQUIREMENTS>
 
 <SUBAGENT_DELEGATION>
-You have access to specialized subagents to delegate verification and refining tasks. You can run them using subagent task tools:
-1. **Linter** (`linter`): Run this subagent to verify formatting and fix static analysis errors on your changed files.
-2. **UI Refiner** (`ui_refiner`): Run this subagent to polish styling, spacing, and design system tokens on visual layouts.
+{subagent_delegation}
 </SUBAGENT_DELEGATION>
 
 <VERIFICATION_PROTOCOL>
 1. Before finishing, run `git status` or inspect the file system (e.g. via `ls` or `find`) to verify files under the repository workspace have changed.
 2. If `git` is unavailable on the system, verify file existence manually. If no files have changed, you have FAILED. Create the missing files and try again.
-3. Delegate verification tasks to the relevant subagent (e.g. run the `linter` subagent to analyze your changes) before completing.
+3. Delegate verification tasks to the relevant subagent (e.g. run the `{linter_ref}` subagent to analyze your changes) before completing.
 4. Before declaring success, search for any "TODO" tags and ensure they are addressed.
 </VERIFICATION_PROTOCOL>
 </{Prompts.INSTRUCTIONS_TAG}>"""
