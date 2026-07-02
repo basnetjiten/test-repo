@@ -79,6 +79,35 @@ class ApiStrategy(PlatformStrategy):
         pyproj = repo_path / "pyproject.toml"
 
         if package_json.exists():
+            # Fix ESLint flat config file if it has legacy formatting (misconfigured starter kit)
+            eslint_flat_config = repo_path / "eslint.config.js"
+            if eslint_flat_config.exists():
+                try:
+                    content = eslint_flat_config.read_text(encoding="utf-8")
+                    if "module.exports = {" in content and "parser:" in content:
+                        logger.info("Detected legacy config format inside eslint.config.js. Re-writing with valid flat configuration...")
+                        valid_flat_config = (
+                            "const tsParser = require('@typescript-eslint/parser');\n\n"
+                            "module.exports = [\n"
+                            "  {\n"
+                            "    files: ['**/*.ts'],\n"
+                            "    languageOptions: {\n"
+                            "      parser: tsParser,\n"
+                            "      parserOptions: {\n"
+                            "        project: './tsconfig.json',\n"
+                            "        sourceType: 'module',\n"
+                            "      },\n"
+                            "    },\n"
+                            "    rules: {\n"
+                            "      '@typescript-eslint/no-explicit-any': 'off',\n"
+                            "    },\n"
+                            "  }\n"
+                            "];\n"
+                        )
+                        eslint_flat_config.write_text(valid_flat_config, encoding="utf-8")
+                except Exception as e:
+                    logger.warning("Failed to fix legacy eslint.config.js: %s", e)
+
             # Node / NestJS
             logger.info("Detected NestJS/Node project. Installing node modules...")
             # Try npm install
