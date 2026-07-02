@@ -109,7 +109,7 @@ def _route_after_validate(state: GraphState) -> str:
     is_spoq = state.is_spoq
     
     if is_spoq:
-        has_failures = state.failed
+        has_failures = state.failed or any(state.failed_platforms.values())
         if has_failures:
             return "repair"
             
