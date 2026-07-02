@@ -102,7 +102,7 @@ async def generate_node(state: GraphState) -> GraphState:
             )
             return platform, existing_result, session_ids.get(platform)
         
-        plat_path = repo_path / platform if len(ctx.platforms) > 1 else repo_path
+        plat_path = ctx.platform_path(platform)
         # Project-scoped plan file: .opencode/<space_name>/<platform>_plan.md
         plan_file = ctx.project_storage_dir(config.OPENCODE_PROJECT_DIR) / f"{platform}_plan.md"
 

@@ -91,7 +91,7 @@ async def plan_node(state: GraphState) -> GraphState:
     async def plan_single_platform(platform: str) -> tuple[str, JobResult]:
         logger.info("[%s] Running planner...", platform)
         
-        plat_path = repo_path / platform if len(ctx.platforms) > 1 else repo_path
+        plat_path = ctx.platform_path(platform)
         # Project-scoped plan file: .opencode/<space_name>/<platform>_plan.md
         plan_file = ctx.project_storage_dir(config.OPENCODE_PROJECT_DIR) / f"{platform}_plan.md"
         plan_file.parent.mkdir(parents=True, exist_ok=True)

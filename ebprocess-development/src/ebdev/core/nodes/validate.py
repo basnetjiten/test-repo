@@ -82,10 +82,7 @@ async def validate_node(state: GraphState) -> GraphState:
     # 1. Async Validation Worker Function
     async def validate_single_platform(platform: str) -> tuple[str, list[str]]:
         logger.info("[%s] Running checks...", platform)
-        if len(ctx.platforms) > 1:
-            plat_path = repo_path / platform
-        else:
-            plat_path = repo_path
+        plat_path = ctx.platform_path(platform)
 
         strategy = get_platform_strategy(platform)
         try:

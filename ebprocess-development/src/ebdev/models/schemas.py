@@ -149,6 +149,25 @@ class JobContext(BaseModel):
         storage.mkdir(parents=True, exist_ok=True)
         return storage
 
+    def platform_dir_name(self, platform: str) -> str:
+        """Get the customized directory name for a platform under multi-platform workspaces."""
+        proj_name = (self.space_name or "project").lower().replace("-", "_")
+        if platform == "api":
+            return f"{self.space_name or 'project'}-services"
+        elif platform == "flutter":
+            return f"{proj_name}_flutter"
+        elif platform == "web":
+            return f"{self.space_name or 'project'}-web"
+        return f"{proj_name}_{platform}"
+
+    def platform_path(self, platform: str) -> Path:
+        """Get the absolute directory path of a platform repository workspace."""
+        base_path = Path(self.repo_path)
+        if len(self.platforms) > 1:
+            return base_path / self.platform_dir_name(platform)
+        return base_path
+
+
 
 # ---------------------------------------------------------------------------
 # Private normalisation helpers (used only by model validators)

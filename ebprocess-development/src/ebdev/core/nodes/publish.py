@@ -75,10 +75,7 @@ async def publish_node(state: GraphState) -> GraphState:
     # 1. Async Publishing Worker Function
     async def publish_single_platform(platform: str) -> str | None:
         logger.info("[%s] Starting git actions...", platform)
-        if len(platforms) > 1:
-            plat_path = repo_path / platform
-        else:
-            plat_path = repo_path
+        plat_path = ctx.platform_path(platform)
 
         git = GitService(plat_path)
 
