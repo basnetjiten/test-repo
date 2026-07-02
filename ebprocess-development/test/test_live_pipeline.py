@@ -32,7 +32,7 @@ from ebdev.models.schemas import GraphState, JobContext, SprintTicket
 # ---------------------------------------------------------------------------
 # Real project space — drives workspace/<SPACE_NAME>/ and .opencode/<SPACE_NAME>/
 SPACE_NAME = "ebmobileapp"
-TICKET_ID = "EPIC-102c"
+TICKET_ID = "EPIC-102d"
 JOB_ID = f"job_{TICKET_ID.lower().replace('-', '_')}"
 
 
