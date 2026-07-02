@@ -77,7 +77,7 @@ class ApiStrategy(PlatformStrategy):
             # Node / NestJS
             logger.info("Detected NestJS/Node project. Installing node modules...")
             # Try npm install
-            returncode, _, stderr = await self._run_command(["npm", "install"], repo_path)
+            returncode, _, stderr = await self._run_command(["npm", "install", "--legacy-peer-deps", "--engine-strict=false"], repo_path)
             if returncode != 0:
                 logger.warning("npm install failed: %s", stderr.decode().strip())
         elif req_txt.exists():
