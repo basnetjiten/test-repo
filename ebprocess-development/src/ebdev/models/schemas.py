@@ -1,8 +1,35 @@
-from typing import List, Optional, Dict
+# -*- coding: utf-8 -*-
+"""
+schemas.py
+==========
+Pydantic data schemas and pipeline state definitions for ebprocess-development.
+
+Responsibilities
+----------------
+* Define input/output schemas for pipeline jobs (JobContext, JobResult).
+* Define the LangGraph pipeline execution state (GraphState).
+* Provide orchestration strategy and SPOQ task schemas.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Dict, List, Optional
+
 from pydantic import BaseModel, Field, model_validator
 
+# ---------------------------------------------------------------------------
+# Default values
+# ---------------------------------------------------------------------------
+_DEFAULT_PLATFORM: str = "flutter"
 
+
+# ---------------------------------------------------------------------------
+# Ticket Schema
+# ---------------------------------------------------------------------------
 class SprintTicket(BaseModel):
+    """Represents a single sprint ticket or issue from a project management system."""
+
     id: str
     title: str
     description: str
@@ -12,27 +39,41 @@ class SprintTicket(BaseModel):
 
     @property
     def summary(self) -> str:
-        """Alias summary to title for compatibility."""
+        """Alias for title — kept for interface compatibility."""
         return self.title
 
 
+# ---------------------------------------------------------------------------
+# Job Context Schema
+# ---------------------------------------------------------------------------
 class JobContext(BaseModel):
+    """
+    Pipeline execution context for a single job.
+
+    The ``space_name`` field is the project identifier and drives all
+    workspace and storage path resolution (see ``project_storage_dir``).
+    """
+
     job_id: str
     space_name: str
     ticket_id: str
     ticket: SprintTicket
     repo_path: str
-    platform: str = "flutter"  # Backward compatibility fallback
-    platforms: List[str] = Field(default_factory=list)  # Active platforms list
+
+    # Platform resolution — always kept in sync by the model validator
+    platform: str = _DEFAULT_PLATFORM
+    platforms: List[str] = Field(default_factory=list)
     current_agent: str = "plan"
 
-    # Repository management properties
+    # Repository management
     branch: str = "main"
     project_repo: Optional[str] = None
     starter_kit_url: Optional[str] = None
     starter_type: Optional[str] = None
-    # Per-platform scaffold types. Defaults: "api" → "nestjs", "flutter" → "flutter".
-    starter_types: Dict[str, str] = Field(default_factory=lambda: {"api": "nestjs", "flutter": "flutter"})
+    # Per-platform scaffold types. e.g. {"api": "nestjs", "flutter": "flutter"}
+    starter_types: Dict[str, str] = Field(
+        default_factory=lambda: {"api": "nestjs", "flutter": "flutter"}
+    )
     n8n_callback_url: Optional[str] = None
     linked_ticket_ids: List[str] = Field(default_factory=list)
 
@@ -42,127 +83,165 @@ class JobContext(BaseModel):
     mocking_level: str = "live"
     offline_first: bool = False
 
-    # SPOQ State properties
+    # SPOQ execution state
     spoq_epic_dir: Optional[str] = None
-    
-    # Progress tracking properties
+
+    # Progress tracking (excluded from serialization)
     repair_iteration: int = Field(0, exclude=True)
     generated_branch: Optional[str] = Field(None, exclude=True)
     validation_errors: List[str] = Field(default_factory=list)
 
+    # ------------------------------------------------------------------
+    # Validation
+    # ------------------------------------------------------------------
     @model_validator(mode="before")
     @classmethod
     def _populate_defaults(cls, data: dict) -> dict:
-        """Handle fallback and default calculations."""
-        # Support fallback mapping for backward compatibility when loading serialized JSON
-        if "jira_ticket_id" in data and "ticket_id" not in data:
-            data["ticket_id"] = data["jira_ticket_id"]
-        if "jira_space_name" in data and "space_name" not in data:
-            data["space_name"] = data["jira_space_name"]
-        if "jira_ticket" in data and "ticket" not in data:
-            data["ticket"] = data["jira_ticket"]
-        if "linked_jira_ids" in data and "linked_ticket_ids" not in data:
-            data["linked_ticket_ids"] = data["linked_jira_ids"]
-        if "jira_label" in data and "ticket_label" not in data:
-            data["ticket_label"] = data["jira_label"]
+        """
+        Normalise input data before field assignment.
 
-        # Standardize job_id and ticket_id
-        if "job_id" not in data and "ticket_id" in data:
-            data["job_id"] = data["ticket_id"]
-        elif "ticket_id" not in data and "job_id" in data:
-            data["ticket_id"] = data["job_id"]
-
-        # Sync single platform string and multi platform lists
-        if "platform" in data and not data.get("platforms"):
-            data["platforms"] = [data["platform"]]
-        elif "platforms" in data and not data.get("platform"):
-            if data["platforms"]:
-                data["platform"] = data["platforms"][0]
-            else:
-                data["platform"] = "flutter"
-                data["platforms"] = ["flutter"]
-        elif "platforms" not in data and "platform" not in data:
-            data["platform"] = "flutter"
-            data["platforms"] = ["flutter"]
-
-        # Calculate feature name if not provided
-        if not data.get("feature_name"):
-            ticket = data.get("ticket")
-            if ticket:
-                if isinstance(ticket, dict):
-                    data["feature_name"] = ticket.get("title", "")
-                else:
-                    data["feature_name"] = getattr(ticket, "title", "")
-
+        Responsibilities:
+        - Mirror ``job_id`` ↔ ``ticket_id`` when only one is supplied.
+        - Synchronise the ``platform`` string with the ``platforms`` list.
+        - Derive ``feature_name`` from the ticket title when absent.
+        """
+        _sync_job_ids(data)
+        _sync_platforms(data)
+        _resolve_feature_name(data)
         return data
 
-    def project_storage_dir(self, base_opencode_dir: str) -> "Path":
+    # ------------------------------------------------------------------
+    # Public helpers
+    # ------------------------------------------------------------------
+    def project_storage_dir(self, base_opencode_dir: str) -> Path:
         """
-        Return the project-scoped storage directory inside .opencode/.
+        Return the project-scoped storage directory inside ``.opencode/``.
 
-        Isolates plan files, tasks, and SPOQ data per-project so concurrent
-        pipeline runs across different projects never collide.
+        Isolates plan files, task contexts, and SPOQ data per project so
+        concurrent pipeline runs across different projects never collide.
 
         Parameters
         ----------
-        base_opencode_dir : str
-            The base .opencode/ directory path from config.OPENCODE_PROJECT_DIR.
+        base_opencode_dir:
+            Base ``.opencode/`` directory path from ``config.OPENCODE_PROJECT_DIR``.
 
         Returns
         -------
         Path
             Resolved path: ``<base_opencode_dir>/<space_name>/``
         """
-        from pathlib import Path  # local import avoids top-level circular dep
-        project_key = self.space_name or "default"
-        storage = Path(base_opencode_dir) / project_key
+        storage = Path(base_opencode_dir) / (self.space_name or "default")
         storage.mkdir(parents=True, exist_ok=True)
         return storage
 
 
+# ---------------------------------------------------------------------------
+# Private normalisation helpers (used only by model validators)
+# ---------------------------------------------------------------------------
+def _sync_job_ids(data: dict) -> None:
+    """Mirror ``job_id`` ↔ ``ticket_id`` when only one side is provided."""
+    if "job_id" not in data and "ticket_id" in data:
+        data["job_id"] = data["ticket_id"]
+    elif "ticket_id" not in data and "job_id" in data:
+        data["ticket_id"] = data["job_id"]
+
+
+def _sync_platforms(data: dict) -> None:
+    """
+    Ensure ``platform`` (str) and ``platforms`` (list) are always in sync.
+
+    Resolution order:
+    1. ``platform`` is set but ``platforms`` is empty  → expand to list.
+    2. ``platforms`` is set but ``platform`` is empty  → derive from first item.
+    3. Neither is set                                  → default to flutter.
+    """
+    has_platform = "platform" in data and data.get("platform")
+    has_platforms = "platforms" in data and data.get("platforms")
+
+    if has_platform and not has_platforms:
+        data["platforms"] = [data["platform"]]
+        return
+
+    if has_platforms and not has_platform:
+        data["platform"] = data["platforms"][0]
+        return
+
+    if not has_platform and not has_platforms:
+        data["platform"] = _DEFAULT_PLATFORM
+        data["platforms"] = [_DEFAULT_PLATFORM]
+
+
+def _resolve_feature_name(data: dict) -> None:
+    """Derive ``feature_name`` from the ticket title when it is absent."""
+    if data.get("feature_name"):
+        return
+    ticket = data.get("ticket")
+    if ticket is None:
+        return
+    if isinstance(ticket, dict):
+        data["feature_name"] = ticket.get("title", "")
+    else:
+        data["feature_name"] = getattr(ticket, "title", "")
+
+
+# ---------------------------------------------------------------------------
+# Job Result Schema
+# ---------------------------------------------------------------------------
 class JobResult(BaseModel):
+    """Represents the output result of a completed pipeline job."""
+
     job_id: str
     space_name: str
-
     ticket_id: str
     status: str  # "success" | "failed" | "partial"
     summary: Optional[str] = None
     warnings: List[str] = Field(default_factory=list)
     errors: List[str] = Field(default_factory=list)
-    pr_url: Optional[str] = None  # Pull request link
-
-    @model_validator(mode="before")
-    @classmethod
-    def _populate_defaults(cls, data: dict) -> dict:
-        """Handle fallback and default calculations."""
-        if "jira_space_name" in data and "space_name" not in data:
-            data["space_name"] = data["jira_space_name"]
-        if "jira_id" in data and "ticket_id" not in data:
-            data["ticket_id"] = data["jira_id"]
-        return data
+    pr_url: Optional[str] = None
 
     @property
     def pull_request_url(self) -> Optional[str]:
-        """Alias pull_request_url to pr_url for compatibility."""
+        """Alias for ``pr_url`` — kept for interface compatibility."""
         return self.pr_url
 
 
+# ---------------------------------------------------------------------------
+# Orchestration Strategy Schema
+# ---------------------------------------------------------------------------
 class OrchestrationStrategy(BaseModel):
-    complexity: str  # "low" | "medium" | "high"
+    """
+    Strategy returned by the ``orchestrate_node`` to control pipeline behaviour.
+
+    Attributes
+    ----------
+    complexity:
+        Ticket complexity rating: ``"low"`` | ``"medium"`` | ``"high"``.
+    execution_mode:
+        Pipeline dispatch mode: ``"spoq"`` | ``"parallel"`` | ``"sequential"``.
+    mocking_level:
+        Frontend mocking approach: ``"live"`` | ``"mock_repositories"`` | ``"ui_stubs"``.
+    """
+
+    complexity: str
     offline_first: bool = False
     ui_ux_only: bool = False
-    execution_mode: str  # "spoq" | "parallel" | "sequential"
-    mocking_level: str = "live"  # "live" | "mock_repositories" | "ui_stubs"
+    execution_mode: str
+    mocking_level: str = "live"
     max_repair_iterations: int = 3
     reasoning: str = ""
     stages: Optional[List[List[str]]] = None
 
 
+# ---------------------------------------------------------------------------
+# SPOQ Task Schema
+# ---------------------------------------------------------------------------
 class SPOQTask(BaseModel):
-    """Schema for a SPOQ task YAML definition."""
+    """Schema for a single SPOQ task YAML definition inside an epic."""
+
     id: str
     title: str
     epic: str
+    description: str = ""
     status: str = "pending"  # pending | in_progress | completed | blocked
     phase: int = 0
     dependencies: List[str] = Field(default_factory=list)
@@ -170,10 +249,19 @@ class SPOQTask(BaseModel):
     files_to_touch: List[str] = Field(default_factory=list)
     outputs: List[str] = Field(default_factory=list)
     acceptance_criteria: List[str] = Field(default_factory=list)
-    description: str = ""
 
 
+# ---------------------------------------------------------------------------
+# Graph State Schema
+# ---------------------------------------------------------------------------
 class GraphState(BaseModel):
+    """
+    LangGraph node state — passed between every node in the pipeline.
+
+    Tracks execution context, strategy, per-platform build results,
+    and OpenCode session IDs for resumable builds.
+    """
+
     context: JobContext
     strategy: Optional[OrchestrationStrategy] = None
     current_stage: int = 0
@@ -185,14 +273,14 @@ class GraphState(BaseModel):
     session_id: Optional[str] = None
     pull_request_url: Optional[str] = None
 
-    # Progressive nodes state tracking
+    # Single-node progress tracking
     validation_output: str = ""
     last_node: str = "start"
     status_message: str = ""
     opencode_session_id: Optional[str] = None
     failed: bool = False
 
-    # Concurrency and multi-platform progressive state tracking
+    # Multi-platform concurrent state tracking
     validation_outputs: Dict[str, str] = Field(default_factory=dict)
     platform_results: Dict[str, JobResult] = Field(default_factory=dict)
     done_platforms: Dict[str, bool] = Field(default_factory=dict)
@@ -201,5 +289,6 @@ class GraphState(BaseModel):
 
     @property
     def is_spoq(self) -> bool:
-        """Helper to quickly check if current execution mode is SPOQ."""
+        """Return True when the active execution mode is SPOQ."""
         return self.strategy is not None and self.strategy.execution_mode == "spoq"
+
