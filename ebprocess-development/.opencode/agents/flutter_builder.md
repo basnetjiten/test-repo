@@ -71,21 +71,21 @@ Invoke only the subagents whose layers appear in the plan. Each agent owns its l
 3. **CRITICAL — Generate ALL feature layers in a single pass.** For every new feature the plan describes, you MUST create ALL of the following files before calling any subagent or running validation. Do NOT create just one file and stop:
 
    **Domain layer** (`lib/features/<feature>/domain/`):
-   - `<feature>_entity.dart` — immutable domain entity (use `@freezed` only if freezed is already in pubspec)
-   - `i_<feature>_repository.dart` — abstract repository interface returning `EitherResponse<T>`
+   - `entities/<feature>_entity.dart` — immutable domain entity (use `@freezed` only if freezed is already in pubspec)
+   - `repositories/i_<feature>_repository.dart` — abstract repository interface returning `EitherResponse<T>`
 
    **Data layer** (`lib/features/<feature>/data/`):
-   - `<feature>_model.dart` — JSON-serializable model extending/implementing the entity
-   - `<feature>_source.dart` — remote/local data source
-   - `<feature>_repository_impl.dart` — concrete repository implementing the domain interface
+   - `models/<feature>_model.dart` — JSON-serializable model extending/implementing the entity
+   - `datasources/<feature>_source.dart` — remote/local data source
+   - `repositories/<feature>_repository_impl.dart` — concrete repository implementing the domain interface
 
-   **State layer** (`lib/features/<feature>/presentation/`):
+   **State layer** (`lib/features/<feature>/presentation/cubit/`):
    - `<feature>_cubit.dart` — cubit with states defined inline or in a separate `_state.dart`
    - `<feature>_state.dart` — sealed state class (do NOT use `.fold()` on cubit emit)
 
    **UI layer** (`lib/features/<feature>/presentation/`):
-   - `<feature>_page.dart` — full page widget wired to the cubit via `BlocProvider`
-   - `<feature>_form.dart` (if form-based) — form widget with validation
+   - `pages/<feature>_page.dart` — full page widget wired to the cubit via `BlocProvider`
+   - `widgets/<feature>_form.dart` (if form-based) — form widget with validation
 
    If a layer is explicitly marked as out-of-scope in the plan, skip it. Otherwise, create it.
 
@@ -115,6 +115,7 @@ Invoke only the subagents whose layers appear in the plan. Each agent owns its l
 - If two repair attempts fail on the same local issue, stop and report the blocker instead of improvising a structural workaround.
 - CRITICAL LANGUAGE RULE: You MUST write ONLY valid Dart code. NEVER generate Java, Kotlin, Swift, or other languages for the flutter platform.
 - CRITICAL ZERO-INTERACTION POLICY: You are a headless, autonomous background agent. NEVER ask the user interactive questions (e.g., "Would you like me to create these files?", "Please provide the path"). If a file path is unspecified, YOU must determine the correct path based on standard Flutter architecture and create it autonomously.
+- CRITICAL SPOQ PROTECTION RULE: NEVER edit, modify, create, or delete any files inside the `.opencode/<space_name>/spoq/` or `workspace/opencode/<space_name>/spoq/` directories. You are NOT allowed to change SPOQ task status (e.g. marking them as completed). Task statuses are managed exclusively by the orchestration graph validators. Any modification will invalidate the run.
 
 ## Output
 - **Always end your response with a JSON block** in this exact format so the pipeline can parse the result:
@@ -129,5 +130,5 @@ Invoke only the subagents whose layers appear in the plan. Each agent owns its l
   ```
   If the build failed, set `"status": "failed"` and populate `"errors"` with the reason.
 - **A `// TODO(figma_assets):` comment in `lib/` is an acceptable known gap** when `@figma_assets` was invoked but the MCP was unavailable. In this case set `"status": "success"` and list the unresolved asset names in `"warnings"` — do NOT set `"status": "failed"` just because assets are missing. The Dart code must still be complete and compilable.
-- If `@flutter_figma_assets` was never attempted despite a non-empty `figma_url`, that is a process error — set `"status": "failed"` and report it in `"errors"`.
+- If `@flutter_figma_assets` was never attempted despite a non-empty `flutter_figma_url`, that is a process error — set `"status": "failed"` and report it in `"errors"`.
 - On failure, report the blocking reason and the exact step that failed in the `"errors"` field.

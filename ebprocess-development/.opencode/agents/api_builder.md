@@ -66,6 +66,7 @@ Invoke only the subagents whose layers appear in the plan. Refer to them by name
      ```
      If no test file exists for the feature yet, skip and note in `warnings`.
 6. **ESLint Flat Config Errors:** If ESLint throws `ESLINT_USE_FLAT_CONFIG` or config parsing errors on `node_modules` files, these are pre-existing environment issues. Do NOT attempt to fix them. Log them in `warnings` and proceed.
+7. **CRITICAL SPOQ PROTECTION:** NEVER edit, modify, create, or delete any files inside the `.opencode/<space_name>/spoq/` or `workspace/opencode/<space_name>/spoq/` directories. You are NOT allowed to change SPOQ task status (e.g. marking them as completed). Task statuses are managed exclusively by the orchestration graph validators. Any modification will invalidate the run.
 
 ## Output Formatting
 
