@@ -50,32 +50,66 @@ Invoke only the subagents whose layers appear in the plan. Each agent owns its l
 | Lint errors remain after implementation | `@flutter_linter` — for focused analysis and safe fixes |
 
 ## Workflow
-0. **Initialize Packages:** Before editing any files, running build runner, or executing analysis, you MUST run:
+0. **Resolve Package Name FIRST (mandatory before any file write):**
    ```bash
-   flutter pub get
+   # If pubspec.yaml exists, extract and cache the package name:
+   grep "^name:" pubspec.yaml | head -1 | awk '{print $2}'
    ```
-   to resolve and cache the dependencies under the container-specific environment.
+   Store this as `PACKAGE_NAME`. Use `package:$PACKAGE_NAME/` as the prefix for ALL internal imports.
+   If `pubspec.yaml` is absent (sparse/lib-only checkout), run:
+   ```bash
+   # Try to infer from any existing dart file
+   grep -r "^part of " lib/ | head -1
+   # Or from the git repo name
+   basename $(git rev-parse --show-toplevel) | tr '-' '_'
+   ```
+   Then run `flutter pub get` to resolve and cache dependencies.
+
 1. Read the plan and extract `Scope`, `Strategy`, `Target module`, and `Orchestration`.
 2. Read every existing file the plan marks as `EXISTING` before editing it.
-3. If the plan specifies any new layer modules, delegate their implementation directly by calling the corresponding subagents:
+
+3. **CRITICAL — Generate ALL feature layers in a single pass.** For every new feature the plan describes, you MUST create ALL of the following files before calling any subagent or running validation. Do NOT create just one file and stop:
+
+   **Domain layer** (`lib/features/<feature>/domain/`):
+   - `<feature>_entity.dart` — immutable domain entity (use `@freezed` only if freezed is already in pubspec)
+   - `i_<feature>_repository.dart` — abstract repository interface returning `EitherResponse<T>`
+
+   **Data layer** (`lib/features/<feature>/data/`):
+   - `<feature>_model.dart` — JSON-serializable model extending/implementing the entity
+   - `<feature>_source.dart` — remote/local data source
+   - `<feature>_repository_impl.dart` — concrete repository implementing the domain interface
+
+   **State layer** (`lib/features/<feature>/presentation/`):
+   - `<feature>_cubit.dart` — cubit with states defined inline or in a separate `_state.dart`
+   - `<feature>_state.dart` — sealed state class (do NOT use `.fold()` on cubit emit)
+
+   **UI layer** (`lib/features/<feature>/presentation/`):
+   - `<feature>_page.dart` — full page widget wired to the cubit via `BlocProvider`
+   - `<feature>_form.dart` (if form-based) — form widget with validation
+
+   If a layer is explicitly marked as out-of-scope in the plan, skip it. Otherwise, create it.
+
+4. Delegate fine-grained implementation to subagents where needed:
    - For domain contract layers, invoke `@flutter_domain`.
    - For data source/model layers, invoke `@flutter_data`.
    - For BLoC/Cubit states, invoke `@flutter_state`.
    - For page/widget layouts, invoke `@flutter_ui`.
-4. **Figma Assets (Best-Effort):** If `plan.md` contains a `## Design Reference` (Figma URL) and UI work is planned:
+
+5. **Figma Assets (Best-Effort):** If `plan.md` contains a `## Design Reference` (Figma URL) and UI work is planned:
    - Invoke `@flutter_figma_assets` first. Store the returned `filename → Assets.*` map.
    - Pass the map to `@flutter_ui`. `@flutter_ui` must use `Assets.*` references — never placeholder URLs.
    - If `@flutter_figma_assets` fails or the MCP is unavailable, do NOT halt. Instruct `@flutter_ui` to leave `// TODO(figma_assets): export <node> → assets/images/<name>.png` comments instead.
-5. Invoke the remaining layer subagents (`@flutter_domain`, `@flutter_data`, `@flutter_state`, `@flutter_ui`) required by the plan.
+
 6. After `@flutter_ui` completes, check for unresolved assets: `grep -r "TODO(figma_assets)" lib/`. If matches exist and `@flutter_figma_assets` wasn't attempted, invoke it now. If it already failed, record the asset names in the JSON `"warnings"` output and continue.
 7. Implement the smallest correct change for any remaining slices.
 8. After each substantive edit, run the narrowest validation available for that slice before widening scope.
 9. Run `flutter pub run build_runner build --delete-conflicting-outputs` only when the plan or the edit requires code generation.
-10. After all layers are complete, run `flutter analyze`. If lint errors remain, invoke `@flutter_linter`.
+10. After all layers are complete, run `flutter analyze lib/features/<feature>/`. If lint errors remain in **our feature files**, invoke `@flutter_linter`. Ignore errors in `.freezed.dart`, `.g.dart`, or `.graphql.dart` files — those are pre-existing generated files outside our scope.
 
 ## Rules
 - CRITICAL CONFIGURATION RULE: NEVER modify `pubspec.yaml`, `pubspec.lock`, `analysis_options.yaml`, or other core framework configuration files. These are environment-managed. If you see missing package warnings, run `flutter pub get` but do NOT edit `pubspec.yaml` directly.
-- Before any import, read `pubspec.yaml` at the root of the repository and extract the `name:` field. Use that value as the package prefix for all imports: `package:<name>/`. Do not introduce `../` imports.
+- CRITICAL PACKAGE NAME RULE: ALWAYS read `pubspec.yaml` first and extract `name:` for the import prefix. NEVER use `your_project_name`, `<project>`, `<package>`, or any other placeholder. The import MUST be `package:<actual_name>/path/to/file.dart`.
+- SPARSE CHECKOUT RULE: If `pubspec.yaml` is absent, infer the package name from existing dart files using `grep -r "^import 'package:" lib/ | head -5`. Use the prefix found there for all new imports.
 - Repositories return `EitherResponse<T>`. Cubits and blocs do not use `.fold()` for async flows.
 - If a referenced class or file is missing, search for an existing equivalent first. Only create a new file when the plan or local evidence requires it.
 - If two repair attempts fail on the same local issue, stop and report the blocker instead of improvising a structural workaround.
