@@ -74,6 +74,7 @@ Invoke only the subagents whose layers appear in the plan. Each agent owns its l
 10. After all layers are complete, run `flutter analyze`. If lint errors remain, invoke `@flutter_linter`.
 
 ## Rules
+- CRITICAL CONFIGURATION RULE: NEVER modify `pubspec.yaml`, `pubspec.lock`, `analysis_options.yaml`, or other core framework configuration files. These are environment-managed. If you see missing package warnings, run `flutter pub get` but do NOT edit `pubspec.yaml` directly.
 - Before any import, read `pubspec.yaml` at the root of the repository and extract the `name:` field. Use that value as the package prefix for all imports: `package:<name>/`. Do not introduce `../` imports.
 - Repositories return `EitherResponse<T>`. Cubits and blocs do not use `.fold()` for async flows.
 - If a referenced class or file is missing, search for an existing equivalent first. Only create a new file when the plan or local evidence requires it.
