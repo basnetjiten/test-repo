@@ -71,19 +71,26 @@ def _clean_project_workspace() -> None:
         shutil.rmtree(project_opencode)
         print(f"  Cleaned opencode storage: {project_opencode}")
 
-    # Clean sessions.json keys matching the current Ticket ID
+    # Clean sessions.json keys matching the current Ticket ID from ALL locations
     import json
-    sessions_file = Path(config.OPENCODE_PROJECT_DIR) / "sessions.json"
-    if sessions_file.exists():
-        try:
-            with open(sessions_file, "r") as f:
-                sessions = json.load(f)
-            cleaned_sessions = {k: v for k, v in sessions.items() if TICKET_ID not in k}
-            with open(sessions_file, "w") as f:
-                json.dump(cleaned_sessions, f, indent=2)
-            print(f"  Cleaned sessions.json keys matching '{TICKET_ID}'")
-        except Exception as e:
-            print(f"  Warning: could not clean sessions.json: {e}")
+    sessions_locations = [
+        Path(config.OPENCODE_PROJECT_DIR) / "sessions.json",
+        Path(config.OPENCODE_PROJECT_DIR) / SPACE_NAME / "sessions.json",
+    ]
+    for sessions_file in sessions_locations:
+        if sessions_file.exists():
+            try:
+                with open(sessions_file, "r") as f:
+                    sessions = json.load(f)
+                original_count = len(sessions)
+                cleaned_sessions = {k: v for k, v in sessions.items() if TICKET_ID not in k}
+                removed = original_count - len(cleaned_sessions)
+                with open(sessions_file, "w") as f:
+                    json.dump(cleaned_sessions, f, indent=2)
+                if removed:
+                    print(f"  Cleaned {removed} session(s) matching '{TICKET_ID}' from {sessions_file}")
+            except Exception as e:
+                print(f"  Warning: could not clean sessions.json at {sessions_file}: {e}")
 
     # Clean jobs.json key matching the current Ticket ID
     jobs_file = Path(config.OPENCODE_PROJECT_DIR) / "jobs.json"
