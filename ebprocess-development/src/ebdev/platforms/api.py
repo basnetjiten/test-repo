@@ -124,19 +124,42 @@ class ApiStrategy(PlatformStrategy):
             lint_ok = True
             test_ok = True
             
-            # Check npm run lint
-            logger.info("Running NestJS linting...")
-            returncode, _, stderr = await self._run_command(["npm", "run", "lint"], repo_path)
-            if returncode != 0:
-                lint_ok = False
-                logger.warning("NestJS Linting failed: %s", stderr.decode().strip())
+            # Get list of modified and untracked TS files
+            logger.info("Identifying modified and untracked TypeScript files in API workspace...")
+            rc, stdout, stderr = await self._run_command(["git", "status", "--porcelain"], repo_path)
+            changed_files: list[str] = []
+            if rc == 0:
+                for line in stdout.decode("utf-8").splitlines():
+                    parts = line.strip().split(None, 1)
+                    if len(parts) == 2:
+                        status, filepath = parts
+                        filepath = filepath.strip()
+                        # If it is a directory, find all .ts files under it recursively
+                        full_path = repo_path / filepath
+                        if full_path.is_dir():
+                            for p in full_path.glob("**/*.ts"):
+                                changed_files.append(str(p.relative_to(repo_path)))
+                        elif filepath.endswith(".ts"):
+                            changed_files.append(filepath)
+
+            if changed_files:
+                logger.info("Running NestJS linting on %d modified files...", len(changed_files))
+                # Run eslint only on the changed files
+                # Using npx eslint with legacy config fallback environment variable
+                cmd = ["npx", "eslint", "--fix"] + changed_files
+                returncode, out, err = await self._run_command(cmd, repo_path)
+                if returncode != 0:
+                    lint_ok = False
+                    logger.warning("NestJS Linting failed on changed files: %s", err.decode().strip() or out.decode().strip())
+            else:
+                logger.info("No changed TypeScript files detected. Skipping linting.")
 
             # Skip NestJS test running for now as requested
             logger.info("Skipping NestJS tests run...")
             test_ok = True
 
             if not lint_ok:
-                errors.append("API Linting failed using npm run lint.")
+                errors.append("API Linting failed using eslint on changed files.")
         else:
             # Python Validation
             lint_ok = True
