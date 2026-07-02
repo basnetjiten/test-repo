@@ -83,7 +83,7 @@ def _clean_project_workspace() -> None:
                 with open(sessions_file, "r") as f:
                     sessions = json.load(f)
                 original_count = len(sessions)
-                cleaned_sessions = {k: v for k, v in sessions.items() if TICKET_ID not in k}
+                cleaned_sessions = {k: v for k, v in sessions.items() if TICKET_ID.lower() not in k.lower()}
                 removed = original_count - len(cleaned_sessions)
                 with open(sessions_file, "w") as f:
                     json.dump(cleaned_sessions, f, indent=2)
@@ -98,11 +98,13 @@ def _clean_project_workspace() -> None:
         try:
             with open(jobs_file, "r") as f:
                 jobs = json.load(f)
-            if TICKET_ID in jobs:
-                del jobs[TICKET_ID]
+            original_count = len(jobs)
+            jobs = {k: v for k, v in jobs.items() if TICKET_ID.lower() not in k.lower()}
+            removed = original_count - len(jobs)
+            if removed:
                 with open(jobs_file, "w") as f:
                     json.dump(jobs, f, indent=2)
-                print(f"  Cleaned jobs.json key: '{TICKET_ID}'")
+                print(f"  Cleaned {removed} job(s) matching '{TICKET_ID}' from jobs.json")
         except Exception as e:
             print(f"  Warning: could not clean jobs.json: {e}")
 
