@@ -373,8 +373,8 @@ class OpenCodeService:
         """
         agent = cls._resolve_agent(job_context)
         platform = job_context.platform
-        # Flat central storage: .opencode/ (not per-platform subdirectory)
-        storage_dir = Path(config.OPENCODE_PROJECT_DIR)
+        # Project-scoped storage: .opencode/<space_name>/
+        storage_dir = job_context.project_storage_dir(config.OPENCODE_PROJECT_DIR)
 
         # Ensure tasks directory exists (plans live directly in storage_dir)
         (storage_dir / "tasks").mkdir(parents=True, exist_ok=True)

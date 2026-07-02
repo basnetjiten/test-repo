@@ -96,10 +96,34 @@ class JobContext(BaseModel):
 
         return data
 
+    def project_storage_dir(self, base_opencode_dir: str) -> "Path":
+        """
+        Return the project-scoped storage directory inside .opencode/.
+
+        Isolates plan files, tasks, and SPOQ data per-project so concurrent
+        pipeline runs across different projects never collide.
+
+        Parameters
+        ----------
+        base_opencode_dir : str
+            The base .opencode/ directory path from config.OPENCODE_PROJECT_DIR.
+
+        Returns
+        -------
+        Path
+            Resolved path: ``<base_opencode_dir>/<space_name>/``
+        """
+        from pathlib import Path  # local import avoids top-level circular dep
+        project_key = self.space_name or "default"
+        storage = Path(base_opencode_dir) / project_key
+        storage.mkdir(parents=True, exist_ok=True)
+        return storage
+
 
 class JobResult(BaseModel):
     job_id: str
     space_name: str
+
     ticket_id: str
     status: str  # "success" | "failed" | "partial"
     summary: Optional[str] = None

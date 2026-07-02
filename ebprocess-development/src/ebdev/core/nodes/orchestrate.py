@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from pathlib import Path
+
 from typing import TYPE_CHECKING
 
 import httpx
@@ -158,9 +158,9 @@ async def orchestrate_node(state: GraphState) -> GraphState:
     # Generate SPOQ Task Queue
     spoq_epic_dir = None
     if strategy.execution_mode == "spoq":
-        # Store SPOQ epic queue in the central .opencode/spoq directory
-        opencode_dir = Path(config.OPENCODE_PROJECT_DIR).resolve()
-        epic_dir = opencode_dir / "spoq" / "epics" / "active" / ticket_id
+        # Project-scoped SPOQ directory: .opencode/<space_name>/spoq/epics/active/<ticket_id>
+        project_storage = ctx.project_storage_dir(config.OPENCODE_PROJECT_DIR)
+        epic_dir = project_storage / "spoq" / "epics" / "active" / ticket_id
         tasks_dir = epic_dir / "tasks"
         tasks_dir.mkdir(parents=True, exist_ok=True)
         

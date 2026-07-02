@@ -21,3 +21,9 @@ env/
 # Project Specific
 .opencode/
 scratch/
+
+# Runtime workspace — checked-out project code lives here, never commit it
+workspace/
+
+# Local secrets — never commit
+.env
