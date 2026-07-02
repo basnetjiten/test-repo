@@ -214,6 +214,31 @@ class JobResult(BaseModel):
     errors: List[str] = Field(default_factory=list)
     pr_url: Optional[str] = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_fields(cls, data: dict) -> dict:
+        """Coerce lists of dicts/non-strings in warnings or errors into standard string list representation."""
+        if isinstance(data, dict):
+            # Sync key-variations for ticket_id / job_id
+            if "job_id" not in data and "ticket_id" in data:
+                data["job_id"] = data["ticket_id"]
+            elif "ticket_id" not in data and "job_id" in data:
+                data["ticket_id"] = data["job_id"]
+            if "space_name" not in data:
+                data["space_name"] = "default"
+
+            for list_field in ("errors", "warnings"):
+                if list_field in data and isinstance(data[list_field], list):
+                    coerced = []
+                    for item in data[list_field]:
+                        if isinstance(item, dict):
+                            # Construct friendly readable string format from dict keys
+                            coerced.append(" | ".join(f"{k}: {v}" for k, v in item.items()))
+                        else:
+                            coerced.append(str(item))
+                    data[list_field] = coerced
+        return data
+
     @property
     def pull_request_url(self) -> Optional[str]:
         """Alias for ``pr_url`` — kept for interface compatibility."""

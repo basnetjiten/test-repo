@@ -118,24 +118,32 @@ async def run_test():
         }
 
     # Patch execution endpoints to bypass real subprocess calls
-    with patch("ebdev.core.nodes.plan.invoke_opencode", side_effect=mock_invoke), \
-         patch("ebdev.core.nodes.generate.invoke_opencode", side_effect=mock_invoke), \
-         patch("ebdev.services.opencode.OpenCodeAPIClient.create_session", mock_create_session), \
-         patch("ebdev.services.opencode.OpenCodeAPIClient.send_prompt_message", mock_send_prompt_message), \
-         patch("ebdev.services.git.GitService._run", return_value=mock_git_run), \
-         patch("ebdev.services.git.GitService.is_git_repo", return_value=True), \
-         patch("ebdev.services.git.GitService.checkout_branch", return_value="Switched branch"), \
-         patch("ebdev.services.git.GitService.sync_with_main", return_value=["Synced"]), \
-         patch("ebdev.services.git.GitService.has_changes", return_value=True), \
-         patch("ebdev.services.git.GitService.commit_all"), \
-         patch("ebdev.services.git.GitService.push"), \
-         patch("ebdev.services.flutter_cmd.pub_get", return_value=True), \
-         patch("ebdev.services.flutter_cmd.build_runner", return_value=True), \
-         patch("ebdev.services.flutter_cmd.analyze", return_value=True), \
-         patch("ebdev.services.flutter_cmd.create", return_value=True), \
-         patch("asyncio.create_subprocess_exec", side_effect=mock_create_subprocess), \
-         patch("ebdev.core.nodes.publish._create_github_pr", return_value="https://github.com/mock/pr/epic-101"):
+    patches = [
+        patch("ebdev.core.nodes.plan.invoke_opencode", side_effect=mock_invoke),
+        patch("ebdev.core.nodes.generate.invoke_opencode", side_effect=mock_invoke),
+        patch("ebdev.services.opencode.OpenCodeAPIClient.create_session", mock_create_session),
+        patch("ebdev.services.opencode.OpenCodeAPIClient.send_prompt_message", mock_send_prompt_message),
+        patch("ebdev.services.git.GitService._run", return_value=mock_git_run),
+        patch("ebdev.services.git.GitService.is_git_repo", return_value=True),
+        patch("ebdev.services.git.GitService.checkout_branch", return_value="Switched branch"),
+        patch("ebdev.services.git.GitService.sync_with_main", return_value=["Synced"]),
+        patch("ebdev.services.git.GitService.has_changes", return_value=True),
+        patch("ebdev.services.git.GitService.commit_all"),
+        patch("ebdev.services.git.GitService.push"),
+        patch("ebdev.services.flutter_cmd.pub_get", return_value=True),
+        patch("ebdev.services.flutter_cmd.build_runner", return_value=True),
+        patch("ebdev.services.flutter_cmd.analyze", return_value=True),
+        patch("ebdev.services.flutter_cmd.create", return_value=True),
+        patch("ebdev.platforms.flutter.FlutterStrategy.bootstrap"),
+        patch("ebdev.platforms.api.ApiStrategy.bootstrap"),
+        patch("asyncio.create_subprocess_exec", side_effect=mock_create_subprocess),
+        patch("ebdev.core.nodes.publish._create_github_pr", return_value="https://github.com/mock/pr/epic-101")
+    ]
 
+    for p in patches:
+        p.start()
+
+    try:
         # Import graph after applying mocks
         from ebdev.core.graph import graph
 
@@ -154,6 +162,9 @@ async def run_test():
             print(f"PR URL: {result.pr_url}")
         else:
             print("No result found in final state!")
+    finally:
+        for p in reversed(patches):
+            p.stop()
 
 
 if __name__ == "__main__":

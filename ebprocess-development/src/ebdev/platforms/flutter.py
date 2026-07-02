@@ -34,7 +34,7 @@ class FlutterStrategy(PlatformStrategy):
 
     async def prepare(self, repo_path: Path, branch_name: str) -> None:
         """
-        Resolve Flutter dependencies.
+        Resolve Flutter dependencies and run code generation.
 
         Parameters
         ----------
@@ -46,13 +46,25 @@ class FlutterStrategy(PlatformStrategy):
         Raises
         ------
         PlatformStrategyError
-            If running flutter pub get fails.
+            If running flutter pub get or build_runner fails.
         """
         logger.info("Preparing Flutter repository at %s", repo_path)
+        pubspec = repo_path / "pubspec.yaml"
+        if not pubspec.exists():
+            logger.warning("No pubspec.yaml found at %s. Skipping dependency resolution and build_runner.", repo_path)
+            return
+
         output_lines: list[str] = []
+        logger.info("Running flutter pub get...")
         if not await flutter_cmd.pub_get(str(repo_path), output=output_lines):
             err_msg = output_lines[-1] if output_lines else "flutter pub get failed"
             raise PlatformStrategyError(f"Flutter preparation failure: {err_msg}")
+
+        logger.info("Running build_runner build...")
+        # Run build_runner during prepare to ensure all code-generated files exist initially
+        if not await flutter_cmd.build_runner(str(repo_path), output=output_lines):
+            logger.warning("Flutter build_runner failed during preparation, proceeding anyway: %s", 
+                           output_lines[-1] if output_lines else "unknown build_runner error")
 
     async def validate(self, repo_path: Path) -> list[str]:
         """
@@ -125,7 +137,7 @@ class FlutterStrategy(PlatformStrategy):
 
     async def bootstrap(self, repo_path: Path, starter_type: str) -> None:
         """
-        Scaffold brand-new Flutter project.
+        Seed Flutter project files. Not implemented on this platform strategy.
 
         Parameters
         ----------
@@ -133,25 +145,8 @@ class FlutterStrategy(PlatformStrategy):
             The destination repository directory.
         starter_type : str
             The type of starter skeleton to bootstrap.
-
-        Raises
-        ------
-        PlatformStrategyError
-            If scaffolding the project template fails.
         """
-        logger.info("Bootstrapping Flutter template in %s", repo_path)
-        output_lines: list[str] = []
-        project_name = repo_path.parent.name.replace("-", "_")
-        if not await flutter_cmd.create(str(repo_path), project_name=project_name, output=output_lines):
-            raise PlatformStrategyError("Failed to scaffold Flutter project template.")
-
-        # Fix SDK version constraint and verify package name in pubspec.yaml
-        pubspec_file = repo_path / "pubspec.yaml"
-        if pubspec_file.exists():
-            content = pubspec_file.read_text(encoding="utf-8")
-            content = content.replace("sdk: ^3.11.3", "sdk: ^3.11.0")
-            pubspec_file.write_text(content, encoding="utf-8")
-
-        # Sync/bootstrap actions
-        await flutter_cmd.pub_get(str(repo_path), output=output_lines)
-        await flutter_cmd.build_runner(str(repo_path), output=output_lines)
+        raise PlatformStrategyError(
+            f"Bootstrapping new boilerplate for {starter_type} is disabled. "
+            "The repository must be pre-populated or cloned from a starter kit."
+        )
