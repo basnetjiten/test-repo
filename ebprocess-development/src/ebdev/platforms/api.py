@@ -48,9 +48,13 @@ class ApiStrategy(PlatformStrategy):
         tuple[int, bytes, bytes]
             A tuple containing return code, stdout bytes, and stderr bytes.
         """
+        import os
+        env = os.environ.copy()
+        env["ESLINT_USE_FLAT_CONFIG"] = "false"
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             cwd=str(cwd),
+            env=env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
