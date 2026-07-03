@@ -61,15 +61,22 @@ services:
       EMBEDDING_TOKEN_LIMIT: "${EMBEDDING_TOKEN_LIMIT:-8192}"
       EMBEDDING_SEND_DIM: "${EMBEDDING_SEND_DIM:-false}"
       EMBEDDING_USE_BASE64: "${EMBEDDING_USE_BASE64:-true}"
+      OLLAMA_LLM_NUM_CTX: "${OLLAMA_LLM_NUM_CTX:-16384}"
+      OLLAMA_EMBEDDING_NUM_CTX: "${OLLAMA_EMBEDDING_NUM_CTX:-8192}"
 
       # ── Reranking ─────────────────────────────────────────────
       RERANK_BINDING: "${RERANK_BINDING:-null}"
 
-      # ── Storage — fully file-based, no external DB needed ─────
+      # ── Storage — fully file-based or PostgreSQL ──────────────
       LIGHTRAG_KV_STORAGE: "${LIGHTRAG_KV_STORAGE:-JsonKVStorage}"
       LIGHTRAG_DOC_STATUS_STORAGE: "${LIGHTRAG_DOC_STATUS_STORAGE:-JsonDocStatusStorage}"
       LIGHTRAG_VECTOR_STORAGE: "${LIGHTRAG_VECTOR_STORAGE:-NanoVectorDBStorage}"
       LIGHTRAG_GRAPH_STORAGE: "${LIGHTRAG_GRAPH_STORAGE:-NetworkXStorage}"
+      POSTGRES_HOST: "${POSTGRES_HOST:-postgres}"
+      POSTGRES_PORT: "${POSTGRES_PORT:-5432}"
+      POSTGRES_USER: "${POSTGRES_USER:-lightrag}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-}"
+      POSTGRES_DATABASE: "${POSTGRES_DATABASE:-lightrag}"
 
     volumes:
       - ./data/rag_storage:/app/data/rag_storage
@@ -89,6 +96,27 @@ services:
       - "host.docker.internal:host-gateway"
 
   # ---------------------------------------------------------------------------
+  # Custom FastAPI Backend and Premium Frontend
+  # ---------------------------------------------------------------------------
+  backend:
+    build:
+      context: .
+      dockerfile: backend.Dockerfile
+    container_name: lightrag-backend
+    ports:
+      - "8088:8088"
+    environment:
+      LIGHTRAG_BASE_URL: "http://lightrag:9621"
+      LIGHTRAG_API_KEY: "${LIGHTRAG_API_KEY:-}"
+      CODA_API_TOKEN: "${CODA_API_TOKEN:-}"
+    depends_on:
+      lightrag:
+        condition: service_healthy
+    volumes:
+      - ./frontend:/app/frontend
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
   # Nginx reverse proxy — optional
   # Start with: docker compose --profile proxy up -d
   # ---------------------------------------------------------------------------
@@ -104,6 +132,23 @@ services:
       - ./nginx/lightrag.conf:/etc/nginx/conf.d/default.conf:ro
     restart: unless-stopped
 
+  # ---------------------------------------------------------------------------
+  # Ollama Local LLM & Embedding Service
+  # ---------------------------------------------------------------------------
+  ollama:
+    profiles: ["local-llm"]
+    image: ollama/ollama:latest
+    container_name: ollama
+    ports:
+      - "${OLLAMA_EXPOSED_PORT:-11434}:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+
 networks:
   default:
     name: lightrag-shared
+
+volumes:
+  ollama_data:
+

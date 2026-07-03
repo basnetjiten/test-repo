@@ -68,3 +68,15 @@ clean-data:
 	rm -rf data/rag_storage data/inputs
 	mkdir -p data/rag_storage data/inputs data/prompts
 	@echo "Done. Start fresh with: make up"
+
+# ---------------------------------------------------------------------------
+# BFF Development & Build
+# ---------------------------------------------------------------------------
+
+run-bff:
+	@echo "Starting custom BFF server locally..."
+	PYTHONPATH=. python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 8088 --reload
+
+build-bff:
+	docker compose build backend
+

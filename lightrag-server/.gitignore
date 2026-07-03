@@ -5,3 +5,30 @@ data/prompts/*
 !data/rag_storage/.gitkeep
 !data/inputs/.gitkeep
 !data/prompts/.gitkeep
+
+# Python cache & virtual environment
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# OS-generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE configurations
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+
