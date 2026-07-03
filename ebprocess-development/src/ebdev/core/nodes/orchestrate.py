@@ -97,6 +97,8 @@ async def orchestrate_node(state: GraphState) -> GraphState:
     
     if has_api and len(platforms) > 1 and not ui_ux_only_detected:
         default_mode = "spoq"
+        # TODO @Jiten Basnet: In the future, integrate with Jira/API to pull the exact task list and hours
+        # for the sprint instead of using the LLM orchestrator to dynamically break down the Epic.
         default_mocking = "mock_repositories" if not offline_first_detected else "live"
     else:
         default_mode = "parallel"
@@ -158,9 +160,9 @@ async def orchestrate_node(state: GraphState) -> GraphState:
     # Generate SPOQ Task Queue
     spoq_epic_dir = None
     if strategy.execution_mode == "spoq":
-        # Project-scoped SPOQ directory: .opencode/<space_name>/spoq/epics/active/<ticket_id>
-        project_storage = ctx.project_storage_dir(config.OPENCODE_PROJECT_DIR)
-        epic_dir = project_storage / "spoq" / "epics" / "active" / ticket_id
+        # Project-scoped SPOQ directory: .ebpearls/epics/<ticket_id>
+        project_storage = ctx.project_storage_dir()
+        epic_dir = project_storage / "epics" / ticket_id
         tasks_dir = epic_dir / "tasks"
         tasks_dir.mkdir(parents=True, exist_ok=True)
         

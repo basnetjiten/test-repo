@@ -57,7 +57,7 @@ def _clean_project_workspace() -> None:
     Removes:
       - workspace/<SPACE_NAME>/api/
       - workspace/<SPACE_NAME>/flutter/
-      - .opencode/<SPACE_NAME>/     (plans, tasks, SPOQ — not sessions.json / jobs.json)
+      - workspace/<SPACE_NAME>/.ebpearls/     (plans, tasks, SPOQ — not sessions.json / jobs.json)
     """
     base_workspace = Path(config.WORKSPACE_DIR) / SPACE_NAME
     for platform in ("api", "flutter"):
@@ -66,16 +66,16 @@ def _clean_project_workspace() -> None:
             shutil.rmtree(plat_dir)
             print(f"  Cleaned workspace: {plat_dir}")
 
-    project_opencode = Path(config.OPENCODE_PROJECT_DIR) / SPACE_NAME
-    if project_opencode.exists():
-        shutil.rmtree(project_opencode)
-        print(f"  Cleaned opencode storage: {project_opencode}")
+    project_ebpearls = base_workspace / ".ebpearls"
+    if project_ebpearls.exists():
+        shutil.rmtree(project_ebpearls)
+        print(f"  Cleaned ebpearls storage: {project_ebpearls}")
 
     # Clean sessions.json keys matching the current Ticket ID from ALL locations
     import json
     sessions_locations = [
         Path(config.OPENCODE_PROJECT_DIR) / "sessions.json",
-        Path(config.OPENCODE_PROJECT_DIR) / SPACE_NAME / "sessions.json",
+        base_workspace / ".ebpearls" / "sessions.json",
     ]
     for sessions_file in sessions_locations:
         if sessions_file.exists():
@@ -116,7 +116,7 @@ async def run_test() -> None:
     print(f"  Project space : {SPACE_NAME}")
     print(f"  Ticket        : {TICKET_ID}")
     print(f"  Workspace     : {Path(config.WORKSPACE_DIR) / SPACE_NAME}")
-    print(f"  OpenCode dir  : {Path(config.OPENCODE_PROJECT_DIR) / SPACE_NAME}")
+    print(f"  Storage dir   : {Path(config.WORKSPACE_DIR) / SPACE_NAME / '.ebpearls'}")
 
     _configure_logging()
     _inject_venv_path()

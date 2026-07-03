@@ -63,43 +63,36 @@ Each project is identified by a **`space_name`** (e.g. `"ebsprinter"`, `"ebproce
 
 ### Directory Layout
 
-```
-workspace/                               ← gitignored; runtime project checkouts
-├── ebsprinter/                          ← space_name
-│   ├── api/                             ← git checkout per platform
-│   └── flutter/
-│
-└── ebprocess/
-    ├── api/
-    ├── cms/
-    └── flutter/
+```text
+workspace/                               ← runtime project checkouts
+├── ebmobileapp/                         ← space_name (repository root)
+│   ├── .ebpearls/                       ← project-scoped storage (In-Repo pattern)
+│   │   ├── tasks/
+│   │   │   ├── EPIC-101_api_context.json
+│   │   │   └── EPIC-101_flutter_context.json
+│   │   ├── EPIC-101_api_plan.md
+│   │   ├── EPIC-101_flutter_plan.md
+│   │   └── epics/
+│   │       └── active/EPIC-101/
+│   │           ├── EPIC.md
+│   │           └── tasks/
+│   │               ├── 00-contract.yml
+│   │               └── 01-flutter.yml
+│   │
+│   ├── ebmobileapp-services/            ← platform (API checkout)
+│   └── ebmobileapp_flutter/             ← platform (Flutter checkout)
 
-.opencode/                               ← gitignored; agent state and plans
+.opencode/                               ← gitignored; agent state and profiles
+├── agents/                              ← agent instructions (e.g. flutter_builder.md)
 ├── sessions.json                        ← shared session registry (cross-project)
-├── jobs.json                            ← shared job registry (cross-project)
-│
-├── ebsprinter/                          ← project-scoped storage (space_name)
-│   ├── tasks/
-│   │   ├── api_context.json
-│   │   └── flutter_context.json
-│   ├── api_plan.md
-│   ├── flutter_plan.md
-│   └── spoq/
-│       └── epics/active/EPIC-101/
-│           ├── EPIC.md
-│           └── tasks/
-│               ├── 00-contract.yml
-│               └── 01-flutter.yml
-│
-└── ebprocess/                           ← isolated from ebsprinter
-    ├── tasks/
-    ├── api_plan.md
-    └── spoq/epics/active/EPIC-201/
+└── jobs.json                            ← shared job registry (cross-project)
 ```
 
 ### Key Isolation Rule
 
-`JobContext.project_storage_dir(base)` resolves to `<OPENCODE_PROJECT_DIR>/<space_name>/` and is the **single canonical method** used by all nodes to resolve plan files, context files, and SPOQ directories. The shared registries (`sessions.json`, `jobs.json`) use `<ticket_id>_<platform>` keyed entries so concurrent projects never overwrite each other's session mappings.
+`JobContext.project_storage_dir(base)` resolves to `<workspace_dir>/<space_name>/.ebpearls/` inside the target repository root. This is the **single canonical method** used by all nodes to resolve plan files, context files, and SPOQ directories. By using an In-Repo pattern, the `.ebpearls` folder can be version-controlled natively with the project.
+
+Furthermore, task context files and plans are scoped by the `job_id` (e.g., `EPIC-101_api_context.json`) to prevent race conditions and overwrites when the factory executes multiple epics in parallel for the same project. The shared registries (`sessions.json`, `jobs.json`) use `<ticket_id>_<platform>` keyed entries so concurrent projects never overwrite each other's session mappings.
 
 ---
 
@@ -179,6 +172,17 @@ graph TD
 ```
 
 After each `validate` pass in SPOQ mode, `get_active_wave_tasks()` reads the SPOQ epic directory and returns `pending` tasks whose `dependencies` are all `completed`. The graph loops back to `plan → generate → validate` until all tasks are done, then advances to `publish`.
+
+### The "Dark Factory" Sprint Lifecycle
+To mimic human agile project planning (e.g. 2-week Sprints in Jira) in the fast-paced automated factory, we adapt from a **Time-Boxed** to a **Wave-Boxed (or Scope-Boxed)** execution model:
+
+1. **The "Sprint Batch" Trigger:** Product Owners group multiple Epics into a Sprint in a ticketing system. Instead of starting a 2-week timer, starting a sprint acts as a CI/CD pipeline trigger that submits the entire batch of Epics to the SPOQ orchestrator.
+2. **The "Micro-Sprint" Execution:** A 2-week human sprint becomes a 2-to-4 hour pipeline run. 
+   - *Wave 1 (Contract Phase):* The orchestrator designs all OpenAPI/GraphQL schemas for the sprint in parallel.
+   - *Wave 2 (Implementation Phase):* Once contracts are finalized, highly parallel swarms generate the frontend and backend of every Epic concurrently.
+   - *Wave 3 (Validation Phase):* Automated tests and linter agents grade the output.
+3. **Queueing and Concurrency:** The factory scales horizontally. Instead of 5 developers tackling tickets sequentially, the Dark Factory spawns agent pairs for every epic in parallel. The only blocking factors are topological dependencies (e.g., Epic B relies on Epic A).
+4. **Continuous Review (The Sprint Demo):** The pipeline only halts for human review (Human-as-an-Agent). Instead of waiting 2 weeks for a demo, Product Owners review automated PRs or staging environments throughout the afternoon, focusing on subjective UI/UX validation or business logic approval.
 
 ---
 

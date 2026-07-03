@@ -55,12 +55,12 @@ def to_container_path(path: Path) -> Path:
       - /Users/.../.opencode/...  -> /.opencode/...
     """
     path_str = str(path.absolute()).replace("\\", "/")
-    if "/.opencode" in path_str:
-        parts = path_str.split("/.opencode")
-        return Path("/.opencode" + parts[-1])
     if "/workspace" in path_str:
         parts = path_str.split("/workspace")
         return Path("/workspace" + parts[-1])
+    if "/.opencode" in path_str:
+        parts = path_str.split("/.opencode")
+        return Path("/.opencode" + parts[-1])
     return path
 
 
@@ -70,8 +70,9 @@ def agent_instructions(job_context: JobContext, storage_dir: Path, platform: str
     agent = job_context.current_agent.lower()
     plat = platform or job_context.platform
     storage_dir_container = to_container_path(storage_dir)
-    plan_path = storage_dir_container / f"{plat}_plan.md"
-    context_path = storage_dir_container / "tasks" / f"{plat}_context.json"
+    prefix = f"{job_context.job_id}_" if getattr(job_context, "job_id", None) else ""
+    plan_path = storage_dir_container / f"{prefix}{plat}_plan.md"
+    context_path = storage_dir_container / "tasks" / f"{prefix}{plat}_context.json"
 
     # Planner instructions
     if "planner" in agent or agent == "plan":

@@ -70,7 +70,7 @@ class JobContext(BaseModel):
     project_repo: Optional[str] = None
     starter_kit_url: Optional[str] = None
     # Per-platform starter kit source repositories.
-    # TODO: In the future, pull these from remote Bitbucket repositories:
+    # TODO @Jiten Basnet: In the future, pull these from remote Bitbucket repositories:
     # starter_kit_urls: Dict[str, str] = Field(
     #     default_factory=lambda: {
     #         "api": "https://bitbucket.org/workspace/ebthemes-api.git",
@@ -128,24 +128,35 @@ class JobContext(BaseModel):
     # ------------------------------------------------------------------
     # Public helpers
     # ------------------------------------------------------------------
-    def project_storage_dir(self, base_opencode_dir: str) -> Path:
+    def project_storage_dir(self, base_opencode_dir: str = "") -> Path:
         """
-        Return the project-scoped storage directory inside ``.opencode/``.
+        Return the project-scoped storage directory inside the repository workspace (In-Repo).
 
-        Isolates plan files, task contexts, and SPOQ data per project so
-        concurrent pipeline runs across different projects never collide.
+        Isolates plan files, task contexts, and SPOQ data in `.ebpearls/` inside
+        the target repository root so they can be version controlled and referenced easily.
 
         Parameters
         ----------
         base_opencode_dir:
-            Base ``.opencode/`` directory path from ``config.OPENCODE_PROJECT_DIR``.
+            Unused in the In-Repo pattern. Left for compatibility.
 
         Returns
         -------
         Path
-            Resolved path: ``<base_opencode_dir>/<space_name>/``
+            Resolved path: ``<repo_root>/.ebpearls/``
         """
-        storage = Path(base_opencode_dir) / (self.space_name or "default")
+        from ebdev.config import config
+        repo_path = Path(self.repo_path)
+        workspace_dir = Path(config.WORKSPACE_DIR).resolve()
+
+        # If repo_path is nested (e.g. workspace/ebmobileapp/ebmobileapp-services),
+        # its parent is the repository root workspace/ebmobileapp/
+        if repo_path.resolve().parent.parent == workspace_dir:
+            repo_root = repo_path.parent
+        else:
+            repo_root = repo_path
+
+        storage = repo_root / ".ebpearls"
         storage.mkdir(parents=True, exist_ok=True)
         return storage
 

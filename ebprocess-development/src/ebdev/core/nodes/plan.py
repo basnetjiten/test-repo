@@ -93,7 +93,8 @@ async def plan_node(state: GraphState) -> GraphState:
         
         plat_path = ctx.platform_path(platform)
         # Project-scoped plan file: .opencode/<space_name>/<platform>_plan.md
-        plan_file = ctx.project_storage_dir(config.OPENCODE_PROJECT_DIR) / f"{platform}_plan.md"
+        prefix = f"{ctx.job_id}_" if ctx.job_id else ""
+        plan_file = ctx.project_storage_dir(config.OPENCODE_PROJECT_DIR) / f"{prefix}{platform}_plan.md"
         plan_file.parent.mkdir(parents=True, exist_ok=True)
             
         if plan_file.exists():

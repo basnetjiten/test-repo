@@ -110,7 +110,7 @@ async def prepare_node(state: GraphState) -> GraphState:
                 if not repo_exists:
                     logger.warning("[%s] Remote repository setup returned error for %s", platform, plat_repo_url)
 
-                # TODO: In the future, pull these from remote Bitbucket repositories.
+                # TODO @Jiten Basnet: In the future, pull these from remote Bitbucket repositories.
                 # For now, resolve per-platform starter kit URL, falling back to ctx.starter_kit_url.
                 resolved_starter_kit = ctx.starter_kit_urls.get(platform) or ctx.starter_kit_url
 

@@ -116,20 +116,6 @@ def extract_json_block(text: str, job_id: str) -> dict | None:
 # ---------------------------------------------------------------------------
 # Model resolution helpers
 # ---------------------------------------------------------------------------
-#: Maps known model-string prefixes to their OpenCode providerID.
-_MODEL_PREFIX_MAP: dict[str, str] = {
-    "gpt-": "openai",
-    "o1": "openai",
-    "o3": "openai",
-    "o4": "openai",
-    "claude": "anthropic",
-    "gemini-": "google",
-    "gemma-": "google",
-    "cogito": "ollama",
-    "qwen": "ollama",
-    "codellama": "ollama",
-    "llama": "ollama",
-}
 
 
 def _build_model_payload(model: str | dict[str, Any] | None) -> dict[str, str] | None:
@@ -141,7 +127,7 @@ def _build_model_payload(model: str | dict[str, Any] | None) -> dict[str, str] |
     model : str | dict | None
         The model configuration. If a string with a ``/`` separator, the prefix
         is used as the providerID directly (e.g. ``"openai/gpt-4o"``). If a plain
-        string, the provider is inferred from the :data:`_MODEL_PREFIX_MAP`. If a
+        string without a slash, it cannot be resolved and returns ``None``. If a
         ``dict``, it is returned unchanged. ``None`` returns ``None``.
 
     Returns
@@ -161,14 +147,6 @@ def _build_model_payload(model: str | dict[str, Any] | None) -> dict[str, str] |
     if "/" in model_str:
         provider_id, model_id = model_str.split("/", 1)
         return {"providerID": provider_id, "modelID": model_id}
-
-    # Prefix-based auto-detection
-    provider_id = next(
-        (pid for prefix, pid in _MODEL_PREFIX_MAP.items() if model_str.startswith(prefix)),
-        None,
-    )
-    if provider_id:
-        return {"providerID": provider_id, "modelID": model_str}
 
     logger.warning(
         "Could not resolve provider ID for model '%s'. "
@@ -325,7 +303,8 @@ class OpenCodeService:
         tasks_dir = storage_dir / "tasks"
         tasks_dir.mkdir(parents=True, exist_ok=True)
 
-        filename = f"{platform}_context.json" if platform else "context.json"
+        prefix = f"{job_context.job_id}_" if getattr(job_context, "job_id", None) else ""
+        filename = f"{prefix}{platform}_context.json" if platform else f"{prefix}context.json"
         ctx_file = tasks_dir / filename
         ctx_file.write_text(job_context.model_dump_json(indent=2, exclude_none=True), encoding="utf-8")
         return ctx_file
@@ -394,22 +373,32 @@ class OpenCodeService:
                 raise OpenCodeExecutionError(f"OpenCode session creation failed: {e}") from e
 
         # 2. Concurrently read Server-Sent Events (SSE) to print deltas
-        async def event_streamer():
+        def _handle_delta(event: dict[str, Any]) -> None:
+            if delta := event.get("properties", {}).get("delta"):
+                print(delta, end="", flush=True)
+
+        def _handle_step_start(event: dict[str, Any]) -> None:
+            part_id = event.get("part", {}).get("id", "Unknown")
+            logger.info("\n[OpenCode Step Start] %s", part_id)
+            if progress_callback:
+                progress_callback(f"Step Started: {part_id}")
+
+        def _handle_step_finish(event: dict[str, Any]) -> None:
+            part_id = event.get("part", {}).get("id", "Unknown")
+            logger.info("\n[OpenCode Step Finish] %s", part_id)
+
+        event_handlers: dict[str, Callable[[dict[str, Any]], None]] = {
+            "message.part.delta": _handle_delta,
+            "step-start": _handle_step_start,
+            "step-finish": _handle_step_finish,
+        }
+
+        async def event_streamer() -> None:
             try:
                 async for event in client.stream_events():
                     evt_type = event.get("type")
-                    if evt_type == "message.part.delta":
-                        delta = event.get("properties", {}).get("delta", "")
-                        if delta:
-                            print(delta, end="", flush=True)
-                    elif evt_type == "step-start":
-                        part_id = event.get("part", {}).get("id")
-                        logger.info("\n[OpenCode Step Start] %s", part_id)
-                        if progress_callback:
-                            progress_callback(f"Step Started: {part_id}")
-                    elif evt_type == "step-finish":
-                        part_id = event.get("part", {}).get("id")
-                        logger.info("\n[OpenCode Step Finish] %s", part_id)
+                    if handler := event_handlers.get(evt_type):  # type: ignore[arg-type]
+                        handler(event)
             except asyncio.CancelledError:
                 pass
             except Exception as e:

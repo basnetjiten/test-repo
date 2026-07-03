@@ -226,8 +226,15 @@ class GitService:
         else:
             if target_clone_url:
                 self._run(["remote", "set-url", "origin", target_clone_url])
-            self._run(["fetch", "origin"])
-            log.append("Fetched updates from repository.")
+            try:
+                self._run(["fetch", "origin"])
+                log.append("Fetched updates from repository.")
+            except subprocess.CalledProcessError as e:
+                logger.warning(
+                    "Fetching from remote failed, continuing locally since remote operations are secondary: %s",
+                    e.stderr or e.stdout,
+                )
+                log.append("Fetch failed; continuing with local repository.")
 
         return log
 
