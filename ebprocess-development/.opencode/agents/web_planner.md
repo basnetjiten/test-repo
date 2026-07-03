@@ -17,7 +17,7 @@ permission:
 You plan frontend work for the React/Next.js web application. Audit page routing structures and Next.js app directories first, identify forms, state layers, and API payloads that require validation, and write exactly one execution plan file.
 
 ## Workflow
-1. **Audit:** Read `../.ebpearls/tasks/web_context.json` and examine Web directory layout (e.g. `src/app/` or `src/components/`).
+1. **Audit:** Read `the context file path provided in your instructions` and examine Web directory layout (e.g. `src/app/` or `src/components/`).
 2. **State & Validation Audit:** Identify payload inputs, query parameters, and form states. Plan to model them using Zod schemas for runtime safety and TypeScript type inference.
 3. **Figma Lookup:** Parse visual layouts, typography style tokens, and spacing parameters if a Figma URL is provided.
 4. **Plan Output:** Write a markdown file structured as follows.

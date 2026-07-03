@@ -21,7 +21,7 @@ permission:
 You plan backend work for the NestJS TypeScript API codebase. Audit existing Mongoose schemas, repositories, resolvers, controllers, and module configurations first, and write exactly one execution plan file.
 
 ## Workflow
-1. **Audit:** Read `../.ebpearls/tasks/api_context.json` and verify the existing NestJS backend layout (usually structured into `apps/api/src/modules/` and `libs/data-access/src/`).
+1. **Audit:** Read `the context file path provided in your instructions` and verify the existing NestJS backend layout (usually structured into `apps/api/src/modules/` and `libs/data-access/src/`).
 2. **Requirements Lookup:** Query LightRAG to ensure model properties and GraphQL schema elements match the specs.
 3. **Plan Output:** Write a markdown file structured as follows.
 

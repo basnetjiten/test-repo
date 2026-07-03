@@ -21,7 +21,7 @@ permission:
 ---
 # Flutter Planner
 
-You plan work for this Flutter codebase. Audit the existing project first, choose the narrowest correct scope, and write exactly one plan file to `../.ebpearls/flutter_plan.md`.
+You plan work for this Flutter codebase. Audit the existing project first, choose the narrowest correct scope, and write exactly one plan file to `the plan file path provided in your instructions`.
 
 ## Scope
 - Planning only. Do not implement product code.
@@ -29,12 +29,12 @@ You plan work for this Flutter codebase. Audit the existing project first, choos
 - Prefer one stable reference pattern over broad exploration.
 
 ## Required Inputs
-- Read `../.ebpearls/tasks/context.json` first.
+- Read `the context file path provided in your instructions` first.
 - Use the actual `lib/features/` tree to verify the target module. Do not invent module paths.
 - If `jira_ticket.figma_url` is present in `context.json`, include it in the plan under a `Design Reference` section. If it is null or absent, omit that section entirely.
 
 ## Workflow
-1. **Audit:** Read `../.ebpearls/tasks/context.json` and verify the `lib/features/` target module.
+1. **Audit:** Read `the context file path provided in your instructions` and verify the `lib/features/` target module.
 2. **Research:** Load relevant skills (`feature-scaffolder`, `api-integration`, `state-management`, `ui-generator`) as needed to resolve tools, model shapes, and custom widgets.
 3. **Design:** Identify affected layers and determine the narrowest valid `Scope` (e.g., `full_feature`, `bug`, `enhancement`, `ui_only`, `data_only`, `graphql_only`, `custom`).
 4. **Draft:** Build a technical audit table for affected files only.

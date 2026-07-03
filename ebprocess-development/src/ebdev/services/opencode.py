@@ -242,7 +242,7 @@ class OpenCodeAPIClient:
             payload["model"] = resolved_model
 
 
-        async with httpx.AsyncClient(timeout=1200.0) as client:
+        async with httpx.AsyncClient(timeout=None) as client:
             res = await client.post(
                 f"{self.base_url}/session/{session_id}/message",
                 json=payload,

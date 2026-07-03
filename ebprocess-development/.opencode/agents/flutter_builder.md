@@ -31,7 +31,7 @@ You implement approved work for this Flutter codebase. Start from the plan, stay
 - Must not redesign the plan unless execution proves the plan is locally wrong.
 
 ## Required Inputs
-- Read `$OPENCODE_PROJECT_DIR/plans/plan.md` before any edit or subagent call.
+- Read the plan file from the path provided in your instructions before any edit or subagent call.
 - If the plan is missing, stop and report that execution cannot proceed without it.
 
 ## Delegation

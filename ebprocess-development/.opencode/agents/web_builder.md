@@ -20,7 +20,7 @@ You implement approved plan steps for the React/Next.js web application.
 
 ## Context & Plan
 
-- Read requirements from: `../.ebpearls/tasks/web_context.json`
+- Read requirements from: `the context file path provided in your instructions`
 - Read the implementation plan from the path provided in the prompt under `Implementation Plan:`.
 
 ## Delegation
