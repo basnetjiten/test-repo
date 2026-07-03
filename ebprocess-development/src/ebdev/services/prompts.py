@@ -183,8 +183,9 @@ EXAMPLE:
 {Prompts.PHASE_IMPLEMENTATION}
 
 <REQUIREMENTS>
+- You MUST read the requirements from the context file found at {context_path}
 - You MUST implement the plan found at {plan_path}
-- If that file does not exist, immediately output: {{"status": "error", "reason": "{ErrorMessages.PLAN_MISSING.format(plan_path=plan_path)}"}} and stop.
+- If that plan file does not exist, immediately output: {{"status": "error", "reason": "{ErrorMessages.PLAN_MISSING.format(plan_path=plan_path)}"}} and stop.
 - CRITICAL: You MUST use absolute paths starting with '{repo_path}/' for all file operations in the `write`, `read`, `edit`, `grep`, and `glob` tools. Do NOT use relative paths (e.g., use '{repo_path}/lib/main.dart' instead of 'lib/main.dart') in tool arguments, as relative paths will resolve to the incorrect default directory (/app).
 - CRITICAL: You MUST anchor all commands and file operations in the repository workspace. Run `cd {repo_path}` before editing, creating files or running compilation/test tools.
 - Edit or write files under the repository workspace directory to implement the plan.
