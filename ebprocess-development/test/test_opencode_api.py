@@ -18,6 +18,15 @@ from ebdev.config import config
 from ebdev.models.schemas import SprintTicket, JobContext, GraphState, JobResult
 
 
+def _discover_space_name() -> str:
+    workspace_dir = Path(config.WORKSPACE_DIR)
+    if workspace_dir.exists():
+        for child in workspace_dir.iterdir():
+            if child.is_dir():
+                return child.name
+    return "project"
+
+
 async def run_test():
     print("=== STARTING PATH ISOLATION INTEGRATION TEST ===")
 
@@ -58,7 +67,7 @@ async def run_test():
     # Initialize JobContext running BOTH platforms in workspace directory
     context = JobContext(
         job_id="job_epic_102",
-        space_name="ebmobileapp",
+        space_name=_discover_space_name(),
         ticket_id="EPIC-102",
         ticket=ticket,
         repo_path=str(workspace_dir),

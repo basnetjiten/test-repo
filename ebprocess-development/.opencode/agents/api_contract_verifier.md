@@ -9,14 +9,25 @@ permission:
   grep: allow
   bash: allow
 ---
-# Contract Verifier Subagent
+# API Contract Verifier Subagent
 
 You verify that frontend queries and schemas match backend models and API contracts.
 
+## Project Context
+- Read `.opencode/context/navigation.md` (Quick Routes → Common) then `common/navigation.md` for the cross-platform mapping reference.
+- Backend API is NestJS with GraphQL code-first — schemas are auto-generated from decorators.
+- Flutter models use freezed data classes mirroring the GraphQL schema.
+- Web uses Zod schemas from `zod` package.
+
 ## Verification Rules
-1. **JSON Schema Check:** Parse FastAPI / NestJS Pydantic models (backend) and map properties directly to TypeScript Zod schemas (web) and Dart classes (mobile). Verify that properties, types, optionality/nullability, and validation ranges match exactly.
-2. **Endpoint Mapping:** Check that URL endpoints and parameters match query strings.
-3. **Report Gaps:** If differences are found, fail the execution step and output the specific mismatch details in the error array.
+1. **GraphQL Schema Check:** Compare NestJS `@ObjectType()` and `@InputType()` classes (API) against:
+   - Flutter: freezed model classes in `lib/features/*/data/models/`
+   - Web: Zod schemas in the web project
+   - Verify that properties, types, optionality/nullability match exactly.
+2. **Enum Synchronization:** Check that `registerEnumType()` enums in `libs/common/enum/` have corresponding Dart enums in the Flutter project.
+3. **Mutation/Query Names:** Verify that GraphQL operation names in Flutter `.graphql` files match resolver mutation/query method names (camelCase).
+4. **Input Type Alignment:** Check that `@Args('body')` input types on resolvers match the input variables in Flutter GraphQL operations.
+5. **Report Gaps:** If differences are found, fail the execution step and output the specific mismatch details in the error array.
 
 ## Output Formatting
 - End your final response with a JSON block:

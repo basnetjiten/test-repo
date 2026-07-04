@@ -149,8 +149,8 @@ class JobContext(BaseModel):
         repo_path = Path(self.repo_path)
         workspace_dir = Path(config.WORKSPACE_DIR).resolve()
 
-        # If repo_path is nested (e.g. workspace/ebmobileapp/ebmobileapp-services),
-        # its parent is the repository root workspace/ebmobileapp/
+        # If repo_path is nested (e.g. workspace/<SPACE_NAME>/<SPACE_NAME>-services),
+        # its parent is the repository root workspace/<SPACE_NAME>/
         if repo_path.resolve().parent.parent == workspace_dir:
             repo_root = repo_path.parent
         else:
@@ -361,4 +361,3 @@ class GraphState(BaseModel):
     def is_spoq(self) -> bool:
         """Return True when the active execution mode is SPOQ."""
         return self.strategy is not None and self.strategy.execution_mode == "spoq"
-

@@ -19,6 +19,7 @@ import logging
 import re
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from urllib.parse import quote
 from typing import TYPE_CHECKING, Any, AsyncGenerator, Callable
 
 import httpx
@@ -26,9 +27,9 @@ from pydantic import ValidationError
 
 from ebdev.config import config
 from ebdev.core.constants import Agents, RegexPatterns
-from ebdev.core.exceptions import OpenCodeExecutionError
 from ebdev.models.schemas import JobResult
 from ebdev.services import prompts
+from ebdev.services.prompts import to_container_path
 
 if TYPE_CHECKING:
     from ebdev.models.schemas import JobContext
@@ -163,7 +164,7 @@ def _build_model_payload(model: str | dict[str, Any] | None) -> dict[str, str] |
 class OpenCodeAPIClient:
     """Client wrapper for communication with the headless OpenCode deepagent server."""
 
-    def __init__(self, base_url: str, api_key: str | None = None):
+    def __init__(self, base_url: str, api_key: str | None = None, directory: str | None = None):
         """
         Initialize the OpenCode API client.
 
@@ -173,9 +174,18 @@ class OpenCodeAPIClient:
             The base URL of the OpenCode server.
         api_key : str | None
             Optional API authorization token.
+        directory : str | None
+            Project directory used to scope OpenCode requests.
         """
         self.base_url = base_url.rstrip("/")
         self.headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        self.directory = directory
+
+    def _params(self) -> dict[str, str] | None:
+        """Return request query parameters for the configured project directory."""
+        if not self.directory:
+            return None
+        return {"directory": self.directory}
 
     async def check_health(self) -> dict:
         """
@@ -187,7 +197,7 @@ class OpenCodeAPIClient:
             Health check JSON data.
         """
         async with httpx.AsyncClient() as client:
-            res = await client.get(f"{self.base_url}/global/health", headers=self.headers)
+            res = await client.get(f"{self.base_url}/global/health", headers=self.headers, params=self._params())
             res.raise_for_status()
             return res.json()
 
@@ -207,7 +217,10 @@ class OpenCodeAPIClient:
         """
         async with httpx.AsyncClient() as client:
             payload = {"title": title} if title else {}
-            res = await client.post(f"{self.base_url}/session", json=payload, headers=self.headers)
+            headers = {**self.headers}
+            if self.directory:
+                headers["x-opencode-directory"] = quote(self.directory, safe="")
+            res = await client.post(f"{self.base_url}/session", json=payload, headers=headers, params=self._params())
             res.raise_for_status()
             return res.json()["id"]
 
@@ -241,12 +254,12 @@ class OpenCodeAPIClient:
         if resolved_model:
             payload["model"] = resolved_model
 
-
         async with httpx.AsyncClient(timeout=None) as client:
             res = await client.post(
                 f"{self.base_url}/session/{session_id}/message",
                 json=payload,
-                headers=self.headers
+                headers=self.headers,
+                params=self._params(),
             )
             res.raise_for_status()
             return res.json()
@@ -261,7 +274,7 @@ class OpenCodeAPIClient:
             The parsed SSE event payload.
         """
         async with httpx.AsyncClient(timeout=None) as client:
-            async with client.stream("GET", f"{self.base_url}/event", headers=self.headers) as stream:
+            async with client.stream("GET", f"{self.base_url}/event", headers=self.headers, params=self._params()) as stream:
                 async for line in stream.aiter_lines():
                     if line.startswith("data:"):
                         try:
@@ -306,7 +319,13 @@ class OpenCodeService:
         prefix = f"{job_context.job_id}_" if getattr(job_context, "job_id", None) else ""
         filename = f"{prefix}{platform}_context.json" if platform else f"{prefix}context.json"
         ctx_file = tasks_dir / filename
-        ctx_file.write_text(job_context.model_dump_json(indent=2, exclude_none=True), encoding="utf-8")
+        serializable_context = job_context.model_copy(
+            update={
+                "repo_path": str(to_container_path(Path(job_context.repo_path))),
+                "spoq_epic_dir": str(to_container_path(Path(job_context.spoq_epic_dir))) if job_context.spoq_epic_dir else None,
+            }
+        )
+        ctx_file.write_text(serializable_context.model_dump_json(indent=2, exclude_none=True), encoding="utf-8")
         return ctx_file
 
     @staticmethod
@@ -344,11 +363,8 @@ class OpenCodeService:
         -------
         tuple[JobResult, str | None]
             A tuple containing the JobResult schema and the session ID.
-
-        Raises
-        ------
-        OpenCodeExecutionError
-            If session initialization or request dispatching fails.
+        OpenCode failures are converted into a failed JobResult so the graph
+        can continue and report the error without aborting the run.
         """
         agent = cls._resolve_agent(job_context)
         platform = job_context.platform
@@ -362,7 +378,8 @@ class OpenCodeService:
         prompt = prompts.build_prompt(job_context, storage_dir=storage_dir, session_id=session_id, platform=platform)
 
         server_url = config.OPENCODE_SERVER_URL or DEFAULT_OPENCODE_SERVER_URL
-        client = OpenCodeAPIClient(base_url=server_url, api_key=config.OPENCODE_API_KEY)
+        directory = str(to_container_path(Path(job_context.repo_path or Path(config.WORKSPACE_DIR) / job_context.space_name)))
+        client = OpenCodeAPIClient(base_url=server_url, api_key=config.OPENCODE_API_KEY, directory=directory)
         
         # 1. Initialize session if not resuming
         if not session_id:
@@ -370,7 +387,14 @@ class OpenCodeService:
                 session_id = await client.create_session(title=f"Job {job_context.ticket_id}")
             except Exception as e:
                 logger.error("Failed to create agent execution session: %s", e)
-                raise OpenCodeExecutionError(f"OpenCode session creation failed: {e}") from e
+                return JobResult(
+                    job_id=job_context.ticket_id,
+                    space_name=job_context.space_name,
+                    ticket_id=job_context.ticket_id,
+                    status="failed",
+                    summary=f"OpenCode session creation failed: {e}",
+                    errors=[str(e)],
+                ), None
 
         # 2. Concurrently read Server-Sent Events (SSE) to print deltas
         def _handle_delta(event: dict[str, Any]) -> None:
@@ -417,7 +441,14 @@ class OpenCodeService:
             )
         except Exception as e:
             logger.error("Failed to execute agent instructions on server: %s", e)
-            raise OpenCodeExecutionError(f"OpenCode execution failed: {e}") from e
+            return JobResult(
+                job_id=job_context.ticket_id,
+                space_name=job_context.space_name,
+                ticket_id=job_context.ticket_id,
+                status="failed",
+                summary=f"OpenCode execution failed: {e}",
+                errors=[str(e)],
+            ), session_id
         finally:
             stream_task.cancel()
             await asyncio.gather(stream_task, return_exceptions=True)

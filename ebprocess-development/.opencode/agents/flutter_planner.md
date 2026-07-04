@@ -30,6 +30,7 @@ You plan work for this Flutter codebase. Audit the existing project first, choos
 
 ## Required Inputs
 - Read `the context file path provided in your instructions` first.
+- Read `.opencode/context/navigation.md` first (Quick Routes table) to locate the relevant context files, then drill into `flutter/navigation.md` for layer-specific section references.
 - Use the actual `lib/features/` tree to verify the target module. Do not invent module paths.
 - If `jira_ticket.figma_url` is present in `context.json`, include it in the plan under a `Design Reference` section. If it is null or absent, omit that section entirely.
 
@@ -44,10 +45,11 @@ You plan work for this Flutter codebase. Audit the existing project first, choos
 - **CRITICAL:** Do NOT ask the user for instructions, clarification, or next steps. If a feature or files do not exist, assume this is a request to create a NEW feature, choose the appropriate folder structure based on the guidelines, and write the plan to create it. You must run headlessly and autonomously.
 - If `jira_ticket.figma_url` is present, set `fluttergen: true` in `## Code Generation` — Figma exports always add files to `assets/images/` or `assets/icons/` which require flutter_gen regeneration.
 - If only existing files change, set `Tools: none`.
-- If a layer is new, specify the corresponding subagents (e.g. `@flutter_domain`, `@flutter_data`, `@flutter_state`, `@flutter_ui`) that will be delegated to create the new layer.
+- If a layer is new, specify ALL corresponding subagents in `Tools:` (e.g. `@flutter_domain`, `@flutter_data`, `@flutter_state`, `@flutter_ui`). Never omit `@flutter_domain` when domain files are listed in the Technical Audit.
 - Use descriptive domain naming. Replace generic names with business-aligned method and field names.
 - Prefer the narrower scope when two scopes could fit.
 - Include only sections relevant to the task. Omit empty sections.
+- For `full_feature` scope, ALL per-layer sections (`## Domain Layer`, `## Data Layer`, `## State Layer`, `## UI Layer`, `## Routing`) are **REQUIRED** — every layer is new and must be specified. Do not omit them.
 - In the `## UI Layer` section, explicitly list each custom widget (from the `ui-generator` skill Widget Resolution Rule table) that maps to a UI component required by the feature. Never name a bare Flutter built-in widget (e.g. `ElevatedButton`, `TextField`, `Scaffold`). 
 - If a new page requiring navigation is introduced, include a `## Routing` section that specifies: (a) the `AutoRoute` entry to add, and (b) whether it belongs at the top level or nested inside an existing wrapper/tab group in `lib/core/routes/app_router.dart`.
 - **Do NOT invent GraphQL operation names, mutation/query field names, or input type names.** The `GraphQL Changes` section must contain only operations confirmed to exist in `lib/graphql/schema.graphql`. If the schema has not been checked, write: `Delegate to @flutter_graphql — schema verification required.` Do not pre-fill a mutation or query with invented field names or types; the `@flutter_graphql` agent owns schema verification and placeholder creation.
@@ -67,8 +69,8 @@ The plan **must use the exact headings below — no renaming, no extra headings,
 **Strategy**: <approach>
 **Justification**: <why this scope>
 **Target module**: <lib/features/...>
-**Tools**: <subagents to invoke, e.g. @flutter_domain, @flutter_data, @flutter_state, @flutter_ui, or none>
-**Orchestration**: <execution order>
+**SubAgents**: <subagents to invoke, e.g. `@flutter_domain`, `@flutter_data`, `@flutter_state`, `@flutter_ui`, or none>
+**Orchestration**: <execution order — use "Scaffold all layers first, then delegate to subagents for implementation" for new features>
 **Pattern ref**: <real file path>
 
 ---
@@ -77,7 +79,7 @@ The plan **must use the exact headings below — no renaming, no extra headings,
 
 \`\`\`yaml
 build_runner:   true | false
-intl_utils:     true | false
+intl_utils:     true | false   # true ONLY when new ARB/localization strings are introduced
 fluttergen:     true | false   # true whenever assets/images/ or assets/icons/ are added (Figma exports)
 \`\`\`
 
@@ -87,7 +89,15 @@ fluttergen:     true | false   # true whenever assets/images/ or assets/icons/ a
 
 | Layer | Target File | Exists | Strategy |
 |-------|-------------|--------|----------|
-| ...   | ...         | ✅/❌  | ...      |
+| Domain model | `domain/models/<feature>_model.dart` | ✅/❌ | Create/Update domain model |
+| Domain repo   | `domain/repositories/<feature>_repository.dart` | ✅/❌ | Create/Update repository interface (no `I` prefix) |
+| Data model    | `data/models/<feature>_model.dart` | ✅/❌ | Create/Update data model (freezed with `fromRemote`) |
+| Data source   | `data/sources/<feature>_source.dart` | ✅/❌ | Create/Update remote source (extends SimplexGraphqlRemoteSource) |
+| Data repo impl| `data/repositories/<feature>_repo_impl.dart` | ✅/❌ | Create/Update repository impl (extends SimplexBaseRepository, uses `processApiCall`) |
+| State         | `presentation/blocs/<feature>_cubit/<feature>_cubit.dart` + `_state.dart` | ✅/❌ | Create/Update cubit and state (extends SimplexCubit, uses FormMixin, `handleAPICall`) |
+| UI page       | `presentation/pages/<feature>_page.dart` | ✅/❌ | Create/Update page widget |
+| UI widget     | `presentation/widgets/<feature>_form.dart` | ✅/❌ | Create/Update form widget |
+| Route         | `core/routes/app_router.dart` | ✅/❌ | Register route entry |
 
 ---
 
@@ -100,27 +110,31 @@ fluttergen:     true | false   # true whenever assets/images/ or assets/icons/ a
 
 ---
 
-<!-- OPTIONAL SECTIONS — include only when the plan requires them -->
+<!-- PER-LAYER DETAIL SECTIONS — For `full_feature` scope, ALL of the following per-layer sections are REQUIRED (every layer is new). For narrower scopes (enhancement, ui_only, data_only), include only the sections for layers with actual modifications. Never include a section with blank content — if the condition is not met, omit the section entirely. -->
 
 ## Design Reference
-<!-- Include only when jira_ticket.figma_url is present -->
+<!-- Include ONLY when jira_ticket.figma_url is present in context.json. -->
 - Figma: <url>
 
 ## GraphQL Changes
 <!-- Required if .graphql files change. List ONLY operations confirmed in lib/graphql/schema.graphql. If unverified, write: "Delegate to @flutter_graphql — schema verification required." -->
 
 ## Domain Layer
-<!-- Required if domain/sources/ or domain/repositories/ change. -->
+<!-- REQUIRED for full_feature scope. For narrower scopes, include if domain/entities/ or domain/repositories/ change.
+     List: entity fields and types, repository method signatures with parameter types and EitherResponse<T> return types. -->
 
 ## Data Layer
-<!-- Required if data/models/, data/sources/, or data/repositories/ change. -->
+<!-- REQUIRED for full_feature scope. For narrower scopes, include if data/models/, data/sources/, or data/repositories/ change.
+     List: model fields, source method signatures, repository method signatures with EitherResponse<T>. -->
 
 ## State Layer
-<!-- Required if presentation/cubit/ or presentation/bloc/ change. 
-     List STATE FIELDS (name/type), METHODS (following state-management skill naming: input/submit/fetch/prefill), MIXINS (e.g., FormMixin, PagingCubit), and STATUS FIELDS (BlocStatus). -->
+<!-- REQUIRED for full_feature scope. For narrower scopes, include if presentation/blocs/ change.
+     List STATE FIELDS (name/type), METHODS (following state-management skill naming: input/submit/fetch/prefill), MIXINS (e.g., FormMixin, PagingCubit), and STATUS FIELDS (BlocStatus).
+     Codebase convention: blocs live in `presentation/blocs/<feature>_cubit/` (NOT `presentation/cubit/`).
+     States use `FormMixin` + `Field<T>` for form fields, and `BlocStatus` for loading/success/error. -->
 
 ## UI Layer
-<!-- Required if presentation/pages/ or presentation/widgets/ change.
+<!-- REQUIRED for full_feature scope. For narrower scopes, include if presentation/pages/ or presentation/widgets/ change.
      List the CUSTOM widget mapping for EVERY UI component (refer to ui-generator skill Widget Resolution Rule table). Never use bare Flutter widgets like Scaffold or TextField.
      Key substitutions (non-exhaustive):
        - Text input          → CustomLabelledFormField / SimplexFormField (if imported)
@@ -137,7 +151,7 @@ fluttergen:     true | false   # true whenever assets/images/ or assets/icons/ a
      If the Figma design requires a component not in the table, flag it explicitly. -->
 
 ## Routing
-<!-- Required if a new page widget is created. Specify where to register in lib/core/routes/app_router.dart. -->
+<!-- REQUIRED for full_feature scope. For narrower scopes, include if a new page widget is created. Specify where to register in lib/core/routes/app_router.dart (top-level or nested). -->
 
 ## Localization
 <!-- Include only when new user-visible strings are introduced -->
@@ -169,14 +183,17 @@ fluttergen:     true | false   # true whenever assets/images/ or assets/icons/ a
 |---|---|
 | ✅ | Verify `Target module` exists via `@explore` before writing |
 | ✅ | `Scope`, `Target module`, `Tools`, `Orchestration` must always be defined |
-| ✅ | `Pattern ref` must be a real file path from discovery, not assumed |
+| ✅ | `Pattern ref` must be a REAL file path from discovery (e.g. `lib/features/auth/presentation/blocs/login/login_cubit.dart`). `N/A` is ONLY permitted if `lib/features/` directory has ZERO existing feature modules — otherwise you MUST reference a real pattern |
 | ✅ | Flutter conventions: `PascalCase` classes, `snake_case` files |
 | ✅ | The plan only includes sections for layers with actual modifications |
+| ✅ | For `full_feature` scope, ALL per-layer sections (`## Domain Layer`, `## Data Layer`, `## State Layer`, `## UI Layer`, `## Routing`) are REQUIRED |
 | ✅ | Include `## Routing` section when a new standalone navigable page is added |
+| ✅ | Technical Audit must use subdirectory paths (`domain/models/`, `domain/repositories/`, `data/models/`, `data/sources/`, `data/repositories/`, `presentation/blocs/`, `presentation/pages/`, `presentation/widgets/`) |
 | ❌ | Leave any included section blank — omit the section entirely instead |
 | ❌ | Assume a GraphQL operation exists without checking `lib/graphql/` |
 | ❌ | Use `full_feature` scope for requirements that touch an existing module |
 | ❌ | Include implementation details (no code, method bodies, or widget trees) |
+| ❌ | Omit `@flutter_domain` from `Tools` when domain files are listed in Technical Audit |
 
 **Bugs** → identify exact file + class + method, state root cause before fix.  
 **GraphQL / API** → list all affected fields (added/removed/retyped) + files needing `build_runner`.

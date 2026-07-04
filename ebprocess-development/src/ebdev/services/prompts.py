@@ -23,9 +23,9 @@ PLATFORM_TECH_STACK: dict[str, str] = {
     ),
     "flutter": (
         "Flutter/Dart mobile app. "
-        "Key directory patterns:\n"
-        "  - lib/features/<feature>/domain/ → entities, repositories, usecases\n"
-        "  - lib/features/<feature>/data/ → models, repositories, datasources\n"
+        "Key directory patterns (verify exact names against existing codebase):\n"
+        "  - lib/features/<feature>/domain/ → entities, repositories\n"
+        "  - lib/features/<feature>/data/ → models, sources, repositories\n"
         "  - lib/features/<feature>/presentation/ → pages, cubit, widgets\n"
         "Use Clean Architecture. Repositories must return EitherResponse<T> and call processApiCall/handleAPICall.\n"
         "CRITICAL: Write ONLY valid Dart code. NEVER output Java, Kotlin, or Swift."
@@ -82,27 +82,93 @@ def agent_instructions(job_context: JobContext, storage_dir: Path, platform: str
 - REQUIREMENT: You MUST save the plan to {plan_path}.
 - REQUIRED ACTION: Call the `write` tool with `filePath` set to '{plan_path}' and `content` set to your generated plan markdown.
 - CRITICAL CONSTRAINT: Do NOT print the plan content in your chat response. Your chat response must contain ONLY the final JSON block. You MUST write the plan to the file using the `write` tool first, then output the final JSON block.
-- CRITICAL REQUIREMENT: In your very first step, you MUST use the `read` tool to inspect the guidelines inside the `/.opencode/skills/` directory for your platform (e.g., read `/.opencode/skills/api-scaffolder/SKILL.md` for NestJS/api or `/.opencode/skills/feature-scaffolder/SKILL.md` for Flutter). Your plan MUST strictly adopt the exact folder paths, base classes (e.g., `BaseRepo`), and structural layers defined in those guidelines. If your plan fails to use these paths and patterns, you have FAILED.
+- CRITICAL REQUIREMENT: In your very first step, you MUST use the `read` tool to inspect the guidelines inside the `/.opencode/skills/` directory for your platform:
+  - For Flutter: read `/.opencode/skills/feature-scaffolder/SKILL.md`, `/.opencode/skills/api-integration/SKILL.md`, `/.opencode/skills/state-management/SKILL.md`, `/.opencode/skills/ui-generator/SKILL.md`
+  - For NestJS/API: read `/.opencode/skills/nestjs-graphql-resolvers/SKILL.md`, `/.opencode/skills/api-integration/SKILL.md`
+  Your plan MUST strictly adopt the exact folder paths, base classes, and structural layers defined in these skills. If your plan fails to use these paths and patterns, you have FAILED.
 
 <PLAN_EXPECTATIONS>
-Your plan must include:
-1. Impacted files and directories (use the PLATFORM_CONTEXT paths as a guide).
-2. Core logic changes per file.
-3. State management or dependency updates.
-4. Verification steps.
-5. Reference to which allowed skills/architecture patterns are being applied.
+Your plan MUST follow this exact Required Plan Shape (from flutter_planner.md). Every heading and field is mandatory — do not rename, reorder, or omit sections unless explicitly marked as scope-dependent:
+
+```markdown
+# Feature Plan
+
+**Scope**: `<full_feature|bug|enhancement|ui_only|data_only|graphql_only|custom>`
+**Type**: `<feature|bug|task>`
+**Title**: <ticket title>
+**Description**: <one-sentence summary>
+**Strategy**: <approach>
+**Justification**: <why this scope>
+**Target module**: <lib/features/...>
+**Tools**: <subagents to invoke — MUST include @flutter_domain, @flutter_data, @flutter_state, @flutter_ui for full_feature>
+**Orchestration**: <"Scaffold all layers first, then delegate to subagents for implementation">
+**Pattern ref**: <REAL file path from discovery, e.g. `lib/features/auth/presentation/blocs/login/login_cubit.dart` — `N/A` is ONLY allowed if `lib/features/` is empty>
+
+---
+
+## Code Generation
+
+```yaml
+build_runner:   true | false
+intl_utils:     true | false   # true ONLY when new ARB/localization strings are introduced
+fluttergen:     true | false
+```
+
+---
+
+## Technical Audit
+
+| Layer | Target File | Exists | Strategy |
+|---|---|---|---|
+| Domain entity | `domain/entities/<feature>_entity.dart` | ❌ | Create domain entity |
+| Domain repo | `domain/repositories/i_<feature>_repository.dart` | ❌ | Create repository interface |
+| Data model | `data/models/<feature>_model.dart` | ❌ | Create data model |
+| Data source | `data/sources/<feature>_source.dart` | ❌ | Create data source |
+| Data repo impl | `data/repositories/<feature>_repository_impl.dart` | ❌ | Create repository impl |
+| State | `presentation/cubit/<feature>_cubit.dart` + `_state.dart` | ❌ | Create cubit and state |
+| UI page | `presentation/pages/<feature>_page.dart` | ❌ | Create page |
+| UI widget | `presentation/widgets/<feature>_form.dart` | ❌ | Create form widget |
+| Route | `core/routes/app_router.dart` | ❌ | Register route |
+
+---
+
+## Architecture Guards
+
+- Repositories return `EitherResponse<T>`. Use `processApiCall`.
+- Cubits use `handleAPICall`. Never `.fold()` in cubits.
+- Package imports: `package:<name>/`. No `../` across features.
+- DI: `@injectable` / `@lazySingleton` on all services.
+
+---
+
+## Domain Layer
+<!-- REQUIRED for full_feature. List entity fields/types, repository method signatures. -->
+
+## Data Layer
+<!-- REQUIRED for full_feature. List model fields, source methods, repository methods. -->
+
+## State Layer
+<!-- REQUIRED for full_feature. List STATE FIELDS (name/type), METHODS, MIXINS, STATUS FIELDS. -->
+
+## UI Layer
+<!-- REQUIRED for full_feature. List custom widget mappings from ui-generator skill. Never use bare Flutter widgets. -->
+
+## Routing
+<!-- REQUIRED for full_feature. Specify where to register in app_router.dart. -->
+
+## Verification
+<!-- Include when specific test/analysis steps are needed. -->
+
+## Warnings
+<!-- Include when there are known risks or blockers. -->
+```
 </PLAN_EXPECTATIONS>
 
-EXAMPLE:
+EXAMPLE (use the exact markdown template shown above in PLAN_EXPECTATIONS):
   Call the `write` tool with:
   filePath: {plan_path}
   content:
-    # Implementation Plan
-    ## Scope
-    Brief description...
-    ## Changes
-    - apps/api/src/modules/user/user.service.ts: Add login method
-    - lib/screens/login/login_screen.dart: Create login UI
+    (The complete plan markdown with all required sections filled in, following the template above.)
 </{Prompts.INSTRUCTIONS_TAG}>"""
 
     # Bug fixer instructions
@@ -190,7 +256,10 @@ EXAMPLE:
 - CRITICAL: You MUST anchor all commands and file operations in the repository workspace. Run `cd {repo_path}` before editing, creating files or running compilation/test tools.
 - Edit or write files under the repository workspace directory to implement the plan.
 - You MUST create or edit at least one source file inside the repository (e.g. inside `lib/`, `src/`, `apps/`, or `libs/`). Writing only to plan or metadata files does NOT count.
-- SKILLS COMPLIANCE: Review the guidelines in the `.opencode/skills/` directory for your platform (e.g., repository interfaces, remote sources, freezed models, state management, or BaseRepo patterns). You MUST strictly follow the structural rules, file locations, coding patterns, and naming conventions defined in those skills.
+- CRITICAL: In your first step, read the skills in `/.opencode/skills/` for your platform-specific patterns:
+  - For Flutter: read `/.opencode/skills/api-integration/SKILL.md` and `/.opencode/skills/state-management/SKILL.md` and `/.opencode/skills/ui-generator/SKILL.md`
+  - For NestJS/API: read `/.opencode/skills/nestjs-graphql-resolvers/SKILL.md` and `/.opencode/skills/api-integration/SKILL.md`
+  You MUST strictly follow the structural rules, file locations, coding patterns, and naming conventions defined in those skills.
 {mock_req}{offline_req}</REQUIREMENTS>
 
 <SUBAGENT_DELEGATION>
@@ -254,9 +323,9 @@ ZERO-QUESTION POLICY:
 {agent_instructions(job_context, storage_dir, platform=plat)}
 
 <{Prompts.FINAL_INSTRUCTION_TAG}>
-- Do NOT explain your steps in chat.
+- Do NOT explain your steps in chat. Your entire chat response must contain ONLY the final JSON code block.
 - You MUST invoke the necessary tools to perform the task.
-- After all work is complete, you MUST output a final status report as a JSON object wrapped in a ```json code block.
+- After all work is complete, you MUST output a final status report as a JSON object wrapped in a ```json code block. No introductory text, no commentary, no summaries outside the JSON.
 - Wait for all tool commands to succeed before concluding your work.
 </{Prompts.FINAL_INSTRUCTION_TAG}>"""
 

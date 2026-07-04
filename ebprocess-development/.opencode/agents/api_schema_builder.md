@@ -18,83 +18,119 @@ You are a NestJS database developer specializing in Mongoose and the Repository 
 
 ## 1. Directory Topology
 
-All database access structures must reside in `libs/data-access/`:
-- **Schema & Repository Folder**: `libs/data-access/src/<feature>/`
-- **Schema File**: `libs/data-access/src/<feature>/<feature>.schema.ts`
-- **Repository File**: `libs/data-access/src/<feature>/<feature>.repository.ts`
-- **Feature Export**: `libs/data-access/src/<feature>/index.ts`
+All database access structures must reside in `libs/data-access/` (relative to <project_root>/):
+- **Schema & Repository Folder**: `libs/data-access/src/<entity>/`
+- **Schema File**: `libs/data-access/src/<entity>/<entity>.schema.ts`
+- **Repository File**: `libs/data-access/src/<entity>/<entity>.repository.ts`
+- **Feature Export**: `libs/data-access/src/<entity>/index.ts`
 - **Model Definition Catalog**: `libs/data-access/src/data-access.models.ts`
 - **Data Access Module**: `libs/data-access/src/data-access.module.ts`
 - **Library Index**: `libs/data-access/src/index.ts`
+
+**IMPORTANT**: The BaseRepo is at `libs/data-access/src/repository/base.repo.ts`. Always use relative import `'../repository/base.repo'` from within data-access.
 
 ---
 
 ## 2. Coding Patterns & Templates
 
 ### A. Mongoose Schema Definition
-Use `@nestjs/mongoose` class decorators. 
-- Use `HydratedDocument` for typing the Mongoose document.
-- Implement soft-delete tracking fields `isDeleted: boolean` and `deleteAt: Date`.
-- Use relative imports if referencing other schemas within `libs/data-access`.
-- Define database indices at the bottom using `Schema.index(...)`.
+Use `@nestjs/mongoose` class decorators.
+- Use `HydratedDocument` for typing the Mongoose document (type: `<Entity> & Document`).
+- Implement soft-delete tracking fields: `isDeleted: boolean` (default: false) and `deletedAt: Date` (default: null).
+- Use `@Schema({ timestamps: true, autoIndex: true })` decorator.
+- For ObjectId references, use `mongoose.Schema.Types.ObjectId` with `ref` option.
+- Define database indices at the bottom using `Schema.index(...)` with named indices.
+- Import enums from `@app/common/enum/` path aliases for status/type fields.
 
-**Example (`libs/data-access/src/enquiry/enquiry.schema.ts`):**
+**Real-world example (`libs/data-access/src/user/user.schema.ts`):**
 ```typescript
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import mongoose, { HydratedDocument } from 'mongoose';
+import { LocationType } from '@app/common/enum/location-type.enum';
+import { LoginFlowType } from '@app/common/enum/login-flow-type.enum';
+import { UserStatus } from '@app/common/enum/user-status.enum';
+import mongoose, { Document } from 'mongoose';
 
-export type EnquiryDocument = HydratedDocument<Enquiry>;
+export type UserDocument = User & Document;
 
-@Schema({ timestamps: true })
-export class Enquiry {
-  @Prop({ required: true, trim: true, maxLength: 100 })
-  title: string;
+@Schema({ timestamps: true, autoIndex: true })
+export class User {
+  @Prop({ required: true })
+  authProvider: AuthProviderType;
 
-  @Prop({ required: true, trim: true, maxLength: 1000 })
-  description: string;
+  @Prop({ unique: true, required: true })
+  authProviderId: string;
 
-  @Prop({ type: Boolean, default: false })
+  @Prop()
+  firstName: string;
+
+  @Prop()
+  lastName: string;
+
+  @Prop()
+  profileImage: string;
+
+  @Prop({ type: String, default: UserStatus.email_verification_pending })
+  status: UserStatus;
+
+  @Prop({ type: String, default: LoginFlowType.otp })
+  loginFlowType: LoginFlowType;
+
+  @Prop({ default: false })
   isDeleted: boolean;
 
-  @Prop({ type: Date })
-  deleteAt: Date;
+  @Prop({ default: null })
+  deletedAt: Date;
 }
 
-export const EnquirySchema = SchemaFactory.createForClass(Enquiry);
+export type UserDocument = User & Document;
+export const UserSchema = SchemaFactory.createForClass(User);
 
-// Add performant indices
-EnquirySchema.index({ createdAt: -1 });
+UserSchema.index(
+  { authProviderId: 1, authProvider: 1, deletedAt: 1 },
+  { name: 'users_auth_provider', background: true },
+);
 ```
 
 ### B. Repository Class
 Repositories MUST extend `BaseRepo<EntityDocument>` to inherit pagination, soft delete, and aggregate queries.
 - Inject the model using `@InjectModel(<Entity>.name)`.
-- Use `toMongoId` from `@app/common/helpers/mongo-helper` if converting string IDs to MongoDB ObjectIds.
 - Import `BaseRepo` via relative path: `import { BaseRepo } from '../repository/base.repo';`.
+- Use path alias `@app/data-access` when importing across modules.
 
-**Example (`libs/data-access/src/enquiry/enquiry.repository.ts`):**
+**Real-world example (`libs/data-access/src/user/user.repository.ts`):**
 ```typescript
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { BaseRepo } from '../repository/base.repo';
-import { Enquiry, EnquiryDocument } from './enquiry.schema';
+import { User, UserDocument } from './user.schema';
 
 @Injectable()
-export class EnquiryRepository extends BaseRepo<EnquiryDocument> {
+export class UsersRepository extends BaseRepo<UserDocument> {
   constructor(
-    @InjectModel(Enquiry.name)
-    private readonly enquiryModel: Model<EnquiryDocument>,
+    @InjectModel(User.name)
+    private readonly userModel: Model<UserDocument>,
   ) {
-    super(enquiryModel);
+    super(userModel);
+  }
+
+  async findByEmail(email: string) {
+    return this.findOne({ authProviderId: email, deletedAt: null });
+  }
+
+  async getAllUsers(pageMeta: PaginationOptions, filter = {}) {
+    return this.findWithPaginate(filter, pageMeta, { ...this.projection, profileImage: 1 });
   }
 }
 ```
 
-### C. Feature Export (`libs/data-access/src/<feature>/index.ts`):
+### C. Feature Export (`libs/data-access/src/<entity>/index.ts`):
 ```typescript
-export * from './enquiry.schema';
-export * from './enquiry.repository';
+export * from './<entity>.schema';
+export * from './<entity>.repository';
+// Export any additional schemas/repos in the folder
+export * from './related.schema';
+export * from './related.repository';
 ```
 
 ---

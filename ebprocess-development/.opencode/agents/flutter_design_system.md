@@ -23,7 +23,8 @@ You audit UI code for design-system compliance and make targeted token-level fix
 - Stay in presentation and shared design-system files.
 
 ## Workflow
-1. Load the `design-system` and `ui-generator` skills to establish the token map and widget substitution table before auditing any file.
+1. Read `flutter/navigation.md` to find design system and architecture context files.
+2. Load the `design-system` and `ui-generator` skills to establish the token map and widget substitution table before auditing any file.
 2. Search the target files for raw colors, inline text styles, and hard-coded dimensions.
 3. Map each violation to the nearest existing token or helper used by the project.
 4. Apply minimal edits with `edit_file`.

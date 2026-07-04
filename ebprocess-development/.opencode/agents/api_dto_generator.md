@@ -16,10 +16,16 @@ You are a data validation and GraphQL modeling specialist. You generate REST inp
 
 ## 1. Directory Structure
 
-All DTOs and GraphQL types reside inside the feature module:
-- **Input DTOs**: `apps/api/src/modules/<feature>/dto/input/`
-- **Response DTOs**: `apps/api/src/modules/<feature>/dto/response/`
-- **GraphQL Types**: `apps/api/src/modules/<feature>/types/`
+All DTOs and GraphQL types reside inside the feature module (relative to `apps/api/src/modules/<feature>/`):
+- **Input DTOs**: `<feature>/dto/input/`
+- **Response DTOs**: `<feature>/dto/response/`
+- **GraphQL Types**: `<feature>/types/`
+
+### Existing Context
+- Common shared DTOs live in `libs/common/dto/response/` (e.g., `MessageResponse`, `BaseEntityResponse`, `PaginationResponse`, `AddressResponse`)
+- Common shared input DTOs live in `libs/common/dto/input/`
+- Enums for GraphQL are in `libs/common/enum/` (all registered via `registerEnumType()`)
+- App-specific DTOs live in `apps/api/src/common/dto/` (e.g., `UserResponse`, `BasePaginationParams`)
 
 ---
 
@@ -27,51 +33,111 @@ All DTOs and GraphQL types reside inside the feature module:
 
 ### A. Input DTOs / GraphQL Input Types
 For GraphQL mutations, input objects must use both `@InputType()` (from `@nestjs/graphql`) and validation decorators (from `class-validator`).
+- File naming: `<action>-<entity>.input.ts` (e.g., `create-user.input.ts`, `update-email.input.ts`)
+- Class naming: PascalCase - `Create<Entity>Input` or `Update<Entity>Input`
+- Use nullable: true + `@IsOptional()` for optional fields
+- Use `@Field(() => Type, { nullable: true })` matching GraphQL schema
 
-**Example (`apps/api/src/modules/enquiry/dto/input/create-enquiry.input.ts`):**
+**Real-world example (`apps/api/src/modules/users/dto/input/update-email.input.ts`):**
 ```typescript
 import { InputType, Field } from '@nestjs/graphql';
-import { IsNotEmpty, IsString, MaxLength } from 'class-validator';
+import { IsEmail, IsNotEmpty, IsString } from 'class-validator';
 
 @InputType()
-export class CreateEnquiryInput {
+export class UpdateUserEmailDto {
   @Field(() => String)
-  @IsString()
+  @IsEmail()
   @IsNotEmpty()
-  @MaxLength(100)
-  title: string;
+  email: string;
 
   @Field(() => String)
   @IsString()
   @IsNotEmpty()
-  @MaxLength(1000)
-  description: string;
+  deviceId: string;
+}
+```
+
+**Pagination input pattern (`apps/api/src/common/dto/base-pagination.dto.ts`):**
+```typescript
+import { Field, InputType } from '@nestjs/graphql';
+import { IsString, IsPositive, IsNumber, Min } from 'class-validator';
+
+@InputType()
+export class BasePaginationParams {
+  @IsString()
+  @Field({ nullable: true, defaultValue: '' })
+  searchText?: string;
+
+  @Field({ nullable: true, defaultValue: '_id' })
+  @IsString()
+  orderBy?: string;
+
+  @IsString()
+  @Field({ nullable: true, defaultValue: 'desc' })
+  order?: string;
+
+  @IsPositive()
+  @IsNumber()
+  @Field({ defaultValue: 5 })
+  limit?: number;
+
+  @Min(0)
+  @IsNumber()
+  @Field({ defaultValue: 0 })
+  skip?: number;
 }
 ```
 
 ### B. GraphQL Object Types / Responses
 For query and mutation responses, define output schema models.
+- File naming: `<entity>.response.ts` or `<action>.response.ts`
+- Class naming: PascalCase - `<Entity>Response`
 - Annotate with `@ObjectType()`.
 - Define properties with `@Field(() => Type)`.
-- Re-use common response classes (like `MessageResponse` from `@app/common/dto/response/message.response`) if returning a generic string status.
+- Re-use common response classes: `MessageResponse`, `BaseEntityResponse`, `PaginationResponse` from `@app/common/dto/response/`.
 
-**Example (`apps/api/src/modules/enquiry/dto/response/enquiry.response.ts`):**
+**Real-world pattern (`apps/api/src/modules/users/dto/response/profile-update.response.ts`):**
 ```typescript
-import { ObjectType, Field, ID } from '@nestjs/graphql';
+import { ObjectType, Field } from '@nestjs/graphql';
+import { UserResponse } from '@api/common/dto/user.response';
 
 @ObjectType()
-export class EnquiryResponse {
+export class ProfileUpdateResponse {
+  @Field({ nullable: true })
+  message: string;
+
+  @Field(() => UserResponse, { nullable: true })
+  user: UserResponse;
+}
+```
+
+**Common response types (from `@app/common/dto/response/`):**
+```typescript
+// MessageResponse — simple string message
+@ObjectType()
+export class MessageResponse {
+  @Field({ nullable: true })
+  message: string;
+}
+
+// BaseEntityResponse — common MongoDB fields
+@ObjectType()
+export class BaseEntityResponse {
   @Field(() => ID)
-  id: string;
-
-  @Field(() => String)
-  title: string;
-
-  @Field(() => String)
-  description: string;
-
+  _id: string;
   @Field(() => Date)
   createdAt: Date;
+  @Field(() => Date)
+  updatedAt: Date;
+}
+
+// PaginationResponse — paginated result metadata
+@ObjectType()
+export class PaginationResponse {
+  @Field()
+  total: number;
+  @Field()
+  hasNextPage: boolean;
 }
 ```
 

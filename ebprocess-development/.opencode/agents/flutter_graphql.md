@@ -23,7 +23,8 @@ You work only on `.graphql` operations and the GraphQL schema path used by this 
 - Does not edit Dart files.
 
 ## Workflow
-1. Load the `api-integration` skill to confirm GraphQL operation conventions before writing any file.
+1. Read `flutter/navigation.md` (Layer-specific patterns → GraphQL section) to find the relevant pattern files before writing anything.
+2. Load the `api-integration` skill to confirm GraphQL operation conventions before writing any file.
 2. Read the `## GraphQL Changes` section in the plan and the nearest existing operation pattern.
 3. Refresh the schema with `graphql_tool_fetch_schema` only when the local schema is missing or clearly outdated.
 4. Check the local schema (`lib/graphql/schema.graphql`) to confirm the operation exists before writing it.

@@ -13,6 +13,15 @@ from ebdev.config import config
 from ebdev.models.schemas import SprintTicket, JobContext, GraphState, JobResult
 
 
+def _discover_space_name() -> str:
+    workspace_dir = Path(config.WORKSPACE_DIR)
+    if workspace_dir.exists():
+        for child in workspace_dir.iterdir():
+            if child.is_dir():
+                return child.name
+    return "project"
+
+
 
 async def run_test():
     print("=== STARTING CONCURRENT MULTI-PLATFORM PIPELINE DRY RUN ===")
@@ -30,10 +39,10 @@ async def run_test():
     # Initialize JobContext running BOTH platforms (sequential stage planning will run api, then flutter)
     context = JobContext(
         job_id="job_epic_101",
-        space_name="ebmobileapp",   # real project space → workspace/ebmobileapp/
+        space_name=_discover_space_name(),
         ticket_id="EPIC-101",
         ticket=ticket,
-        repo_path=str(Path(config.WORKSPACE_DIR) / "ebmobileapp"),
+        repo_path=str(Path(config.WORKSPACE_DIR) / _discover_space_name()),
         platforms=["flutter", "api"],
         current_agent="plan",
     )

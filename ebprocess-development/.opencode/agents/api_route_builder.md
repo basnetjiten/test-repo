@@ -16,9 +16,10 @@ You are a NestJS router developer. You implement GraphQL Resolvers and REST Cont
 
 ## 1. Directory Structure
 
-Controllers and resolvers reside in:
-- **GraphQL Resolver**: `apps/api/src/modules/<feature>/<feature>.resolver.ts`
-- **REST Controller**: `apps/api/src/modules/<feature>/controllers/<feature>.controller.ts`
+Controllers and resolvers reside in (relative to `apps/api/src/modules/<feature>/`):
+- **GraphQL Resolver**: `<feature>/<feature>.resolver.ts` (e.g., `users/users.resolver.ts`)
+- **REST Controller**: `<feature>/controllers/<feature>.controller.ts` (e.g., `auth/controllers/apple.signin.controller.ts`)
+- **Multiple Resolvers**: For complex features, use separate resolver files
 
 ---
 
@@ -27,34 +28,55 @@ Controllers and resolvers reside in:
 ### A. GraphQL Resolvers
 Use GraphQL decorators from `@nestjs/graphql` and security guards from `@nestjs/common`.
 - Inject the domain service in the constructor.
-- `@Resolver(() => TargetType)` sets the schema boundaries.
-- Protect routes with `@UseGuards(AuthUserGuard)`. Import `AuthUserGuard` using relative alias `@api/guards/auth.user.guard`.
-- Return proper types (`MessageResponse` from `@app/common/dto/response/message.response` or feature DTOs).
+- `@Resolver(() => TargetType)` sets the schema boundaries (use the list/response type).
+- Protect routes with `@UseGuards(AuthUserGuard)`. Import from `@api/guards/auth.user.guard`.
+- Use `@UseInterceptors(LoggingInterceptor)` from `@app/common/interceptors/logging.interceptor`.
+- Extract user via `@LoginDetail() user: LoginDetailType` custom decorator from `../auth/decorator/login.decorator`.
+- Use `@Args('body')` for mutation inputs — NOT `@Args()` without name (except for simple params).
+- Use `@I18n() i18n: I18nContext` for template-level translation in resolver.
+- Return proper types: `MessageResponse` (from `@app/common/dto/response/message.response`) or feature-specific DTOs.
 
-**Example Resolver (`apps/api/src/modules/enquiry/enquiry.resolver.ts`):**
+**Real-world Resolver Pattern (`apps/api/src/modules/users/users.resolver.ts`):**
 ```typescript
 import { Resolver, Args, Mutation, Query } from '@nestjs/graphql';
 import { UseGuards, UseInterceptors } from '@nestjs/common';
 import { AuthUserGuard } from '@api/guards/auth.user.guard';
-import { LoggingInterceptor } from '@app/common/interceptors/logging.interceptor';
-import { EnquiryService } from './services/enquiry.service';
-import { EnquiryResponse } from './dto/response/enquiry.response';
-import { CreateEnquiryInput } from './dto/input/create-enquiry.input';
 import { LoginDetail } from '../auth/decorator/login.decorator';
 import { LoginDetailType } from '../auth/types/login-detail.type';
+import { UsersService } from './users.service';
+import { ProfileUpdateResponse } from './dto/response/profile-update.response';
+import { UpdateUserProfile } from '../auth/dto/input/update-user-profile';
+import { LoggingInterceptor } from '@app/common/interceptors/logging.interceptor';
+import { MessageResponse } from '@app/common/dto/response/message.response';
+import { I18n, I18nContext } from 'nestjs-i18n';
 
-@Resolver(() => EnquiryResponse)
+@Resolver(() => UserDetailsResponse)
 @UseGuards(AuthUserGuard)
 @UseInterceptors(LoggingInterceptor)
-export class EnquiryResolver {
-  constructor(private readonly enquiryService: EnquiryService) {}
+export class UsersResolver {
+  constructor(private readonly usersService: UsersService) {}
 
-  @Mutation(() => EnquiryResponse, { name: 'createEnquiry' })
-  async createEnquiry(
+  @Mutation(() => MessageResponse)
+  async deleteAccount(
     @LoginDetail() user: LoginDetailType,
-    @Args('body') body: CreateEnquiryInput,
-  ): Promise<EnquiryResponse> {
-    return this.enquiryService.createEnquiry(body);
+    @I18n() i18n: I18nContext,
+  ): Promise<MessageResponse> {
+    await this.usersService.deleteUserAccount(user?.userId);
+    return { message: i18n.t('users.user_delete') };
+  }
+
+  @Mutation(() => ProfileUpdateResponse)
+  async updateProfile(
+    @LoginDetail() loginDetail: LoginDetailType,
+    @Args('body') body: UpdateUserProfile,
+  ): Promise<ProfileUpdateResponse> {
+    return this.usersService.updateProfile(loginDetail.userId, body);
+  }
+
+  @Query(() => UserResponse)
+  @UseInterceptors(LoggingInterceptor)
+  async me(@LoginDetail() loginDetail: LoginDetailType) {
+    return this.usersService.me(loginDetail?.userId);
   }
 }
 ```
@@ -64,23 +86,24 @@ If REST endpoint triggers are required instead of GraphQL:
 - Annotate with `@Controller('<route>')`.
 - Inject the service, map incoming requests (`@Body()`, `@Param()`), and protect endpoints using `@UseGuards()`.
 
-**Example Controller (`apps/api/src/modules/enquiry/controllers/enquiry.controller.ts`):**
+**Reference Example (`apps/api/src/modules/auth/controllers/apple.signin.controller.ts`):**
 ```typescript
 import { Controller, Post, Body, UseGuards } from '@nestjs/common';
 import { AuthUserGuard } from '@api/guards/auth.user.guard';
-import { EnquiryService } from '../services/enquiry.service';
-import { CreateEnquiryInput } from '../dto/input/create-enquiry.input';
+// ... implementation
+```
 
-@Controller('enquiry')
-@UseGuards(AuthUserGuard)
-export class EnquiryController {
-  constructor(private readonly enquiryService: EnquiryService) {}
-
-  @Post()
-  async create(@Body() body: CreateEnquiryInput) {
-    return this.enquiryService.createEnquiry(body);
-  }
-}
+### C. Key Type: LoginDetailType
+```typescript
+// From apps/api/src/modules/auth/types/login-detail.type.ts
+export type LoginDetailType = {
+  jti: string;
+  userId: string;
+  tokenType: string;
+  grant: string;
+  deviceId?: string;
+  businessId?: string;
+};
 ```
 
 ---

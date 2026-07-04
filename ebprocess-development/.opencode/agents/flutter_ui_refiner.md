@@ -23,7 +23,8 @@ You polish finished UI work after the main implementation is in place.
 - Forbidden: data flow, GraphQL, repositories, domain contracts, and state-management behavior.
 
 ## Workflow
-1. Load the `design-system` and `ui-generator` skills to establish the token map and widget substitution table before any edit.
+1. Read `flutter/navigation.md` to find design system and coding pattern files.
+2. Load the `design-system` and `ui-generator` skills to establish the token map and widget substitution table before any edit.
 2. Review the target UI files for layout or token inconsistencies.
 3. Apply the smallest visual corrections that improve consistency with the local design system.
 4. Run a quick analysis pass when the change could affect widget validity.

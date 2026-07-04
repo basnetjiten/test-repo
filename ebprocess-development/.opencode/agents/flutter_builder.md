@@ -40,8 +40,8 @@ Invoke only the subagents whose layers appear in the plan. Each agent owns its l
 | Condition | Invoke |
 |---|---|
 | Plan scope is `bug` | `@flutter_bug_fixer` — before any code change |
-| Plan includes domain contracts (`domain/sources/`, `domain/repositories/`) | `@flutter_domain` |
-| Plan includes data layer (`models/`, `sources/`, `repositories/` under `data/`) | `@flutter_data` |
+| Plan includes domain contracts (`domain/entities/`, `domain/repositories/`, or Technical Audit lists domain files) | `@flutter_domain` |
+| Plan includes data layer (`models/`, `sources/`, `repositories/` under `data/`, or Technical Audit lists data files) | `@flutter_data` |
 | Plan includes cubit or bloc state | `@flutter_state` |
 | Plan includes GraphQL operations (`.graphql` files) | `@flutter_graphql` — before `@flutter_data`, so generated types exist |
 | Plan includes UI work | `@flutter_ui` for widget implementation, then `@flutter_ui_refiner` for visual polish — but only AFTER step 4 (Figma assets) is complete when a Figma URL is present |
@@ -65,31 +65,33 @@ Invoke only the subagents whose layers appear in the plan. Each agent owns its l
    ```
    Then run `flutter pub get` to resolve and cache dependencies.
 
+0.5. **Discover codebase conventions.** Before creating any files, read `.opencode/context/navigation.md` to find the relevant context files, then `flutter/navigation.md` for layer-specific section references. Verify with `ls lib/features/auth/`:
+
 1. Read the plan and extract `Scope`, `Strategy`, `Target module`, and `Orchestration`.
 2. Read every existing file the plan marks as `EXISTING` before editing it.
 
-3. **CRITICAL — Generate ALL feature layers in a single pass.** For every new feature the plan describes, you MUST create ALL of the following files before calling any subagent or running validation. Do NOT create just one file and stop:
+3. **CRITICAL — Scaffold ALL feature layers FIRST.** Before delegating to subagents, create the directory scaffolding and skeleton files for every new layer. This ensures subagents have a consistent structure to implement into. Create ALL of the following skeleton files before calling any subagent:
 
    **Domain layer** (`lib/features/<feature>/domain/`):
-   - `entities/<feature>_entity.dart` — immutable domain entity (use `@freezed` only if freezed is already in pubspec)
-   - `repositories/i_<feature>_repository.dart` — abstract repository interface returning `EitherResponse<T>`
+   - `models/<feature>_model.dart` — minimal model class (see context/CODING_PATTERNS.md §2)
+   - `repositories/<feature>_repository.dart` — abstract repository interface with method signatures returning `EitherResponse<T>` (no `I` prefix, see context/CODING_PATTERNS.md §1)
 
    **Data layer** (`lib/features/<feature>/data/`):
-   - `models/<feature>_model.dart` — JSON-serializable model extending/implementing the entity
-   - `datasources/<feature>_source.dart` — remote/local data source
-   - `repositories/<feature>_repository_impl.dart` — concrete repository implementing the domain interface
+   - `models/<feature>_model.dart` — minimal freezed model with `fromRemote` factory
+   - `sources/<feature>_source.dart` — abstract source interface + empty impl extending SimplexGraphqlRemoteSource
+   - `repositories/<feature>_repo_impl.dart` — empty repository impl extending SimplexBaseRepository, implementing domain interface, uses `processApiCall`
 
-   **State layer** (`lib/features/<feature>/presentation/cubit/`):
-   - `<feature>_cubit.dart` — cubit with states defined inline or in a separate `_state.dart`
-   - `<feature>_state.dart` — sealed state class (do NOT use `.fold()` on cubit emit)
+   **State layer** (`lib/features/<feature>/presentation/blocs/`):
+   - `<feature>_state.dart` — freezed state class with FormMixin
+   - `<feature>_cubit.dart` — cubit shell extending SimplexCubit
 
    **UI layer** (`lib/features/<feature>/presentation/`):
-   - `pages/<feature>_page.dart` — full page widget wired to the cubit via `BlocProvider`
-   - `widgets/<feature>_form.dart` (if form-based) — form widget with validation
+   - `pages/<feature>_page.dart` — page shell with BlocProvider and @RoutePage()
+   - `widgets/<feature>_form.dart` (if form-based) — minimal form widget using CustomLabelledFormField
 
    If a layer is explicitly marked as out-of-scope in the plan, skip it. Otherwise, create it.
 
-4. Delegate fine-grained implementation to subagents where needed:
+4. Delegate detailed IMPLEMENTATION to subagents. Subagents fill in the method bodies, state logic, and widget trees created in step 3:
    - For domain contract layers, invoke `@flutter_domain`.
    - For data source/model layers, invoke `@flutter_data`.
    - For BLoC/Cubit states, invoke `@flutter_state`.
@@ -118,17 +120,17 @@ Invoke only the subagents whose layers appear in the plan. Each agent owns its l
 - CRITICAL SPOQ PROTECTION RULE: NEVER edit, modify, create, or delete any files inside the `../.ebpearls/epics/` directory. You are NOT allowed to change SPOQ task status (e.g. marking them as completed). Task statuses are managed exclusively by the orchestration graph validators. Any modification will invalidate the run.
 
 ## Output
-- **Always end your response with a JSON block** in this exact format so the pipeline can parse the result:
-  ```json
-  {
-    "job_id": "<value from context.json>",
-    "status": "success",
-    "summary": "<one-line summary of what was built>",
-    "warnings": [],
-    "errors": []
-  }
-  ```
-  If the build failed, set `"status": "failed"` and populate `"errors"` with the reason.
+- **You MUST output ONLY a JSON block with no explanatory text before or after.** Your chat response must contain nothing but the ```json code block.
+```json
+{
+  "job_id": "<value from context.json>",
+  "status": "success",
+  "summary": "<one-line summary of what was built>",
+  "warnings": [],
+  "errors": []
+}
+```
+If the build failed, set `"status": "failed"` and populate `"errors"` with the reason.
 - **A `// TODO(figma_assets):` comment in `lib/` is an acceptable known gap** when `@figma_assets` was invoked but the MCP was unavailable. In this case set `"status": "success"` and list the unresolved asset names in `"warnings"` — do NOT set `"status": "failed"` just because assets are missing. The Dart code must still be complete and compilable.
 - If `@flutter_figma_assets` was never attempted despite a non-empty `flutter_figma_url`, that is a process error — set `"status": "failed"` and report it in `"errors"`.
 - On failure, report the blocking reason and the exact step that failed in the `"errors"` field.

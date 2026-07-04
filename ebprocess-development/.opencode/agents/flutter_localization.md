@@ -22,7 +22,8 @@ You extract new user-facing strings into the app localization flow.
 - Keep localization changes aligned with the existing project naming convention.
 
 ## Workflow
-1. Load the `localization` skill to confirm the ARB key naming convention and l10n accessor pattern before making any change.
+1. Read `flutter/navigation.md` to find the project overview file for localization setup before extracting strings.
+2. Load the `localization` skill to confirm the ARB key naming convention and l10n accessor pattern before making any change.
 2. Find newly introduced hardcoded user-facing strings.
 3. Check whether an existing ARB key already covers the same text.
 4. Add only the missing keys.

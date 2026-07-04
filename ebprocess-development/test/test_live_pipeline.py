@@ -31,7 +31,16 @@ from ebdev.models.schemas import GraphState, JobContext, SprintTicket
 # Test configuration
 # ---------------------------------------------------------------------------
 # Real project space — drives workspace/<SPACE_NAME>/ and .opencode/<SPACE_NAME>/
-SPACE_NAME = "ebmobileapp"
+def _discover_space_name() -> str:
+    workspace_dir = Path(config.WORKSPACE_DIR)
+    if workspace_dir.exists():
+        for child in workspace_dir.iterdir():
+            if child.is_dir():
+                return child.name
+    return "project"
+
+
+SPACE_NAME = _discover_space_name()
 TICKET_ID = "EPIC-102e"
 JOB_ID = f"job_{TICKET_ID.lower().replace('-', '_')}"
 
@@ -182,4 +191,3 @@ async def run_test() -> None:
 
 if __name__ == "__main__":
     asyncio.run(run_test())
-

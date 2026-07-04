@@ -18,6 +18,7 @@ import logging
 import re
 
 from typing import TYPE_CHECKING
+from pathlib import Path
 
 import httpx
 import yaml
@@ -126,7 +127,8 @@ async def orchestrate_node(state: GraphState) -> GraphState:
                 ticket_ac=ticket_ac
             )
             server_url = config.OPENCODE_SERVER_URL or DEFAULT_OPENCODE_SERVER_URL
-            client = OpenCodeAPIClient(base_url=server_url, api_key=config.OPENCODE_API_KEY)
+            directory = ctx.repo_path or str(Path(config.WORKSPACE_DIR) / ctx.space_name)
+            client = OpenCodeAPIClient(base_url=server_url, api_key=config.OPENCODE_API_KEY, directory=directory)
             
             session_id = await client.create_session(title=f"Orchestrator-{ticket_id}")
             res = await client.send_prompt_message(
