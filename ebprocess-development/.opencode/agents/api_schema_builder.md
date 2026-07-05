@@ -33,14 +33,49 @@ All database access structures must reside in `libs/data-access/` (relative to <
 
 ## 2. Coding Patterns & Templates
 
-> [!IMPORTANT]
-> You MUST read the custom skill `nestjs-api-development` (`.opencode/skills/api-scaffolder/SKILL.md`) to get the exact code templates for Schemas and Repositories.
->
-> Key constraints:
-> - **Soft Delete:** Every schema MUST declare `isDeleted: boolean` (default: `false`) and `deletedAt: Date` (default: `null`) to correctly inherit from `BaseRepo`.
-> - **BaseRepo Imports:** Repository files must import `BaseRepo` relative to the entity folder using:
->   `import { BaseRepo } from '../repository/base.repo';`
-> - **Barrel Export:** Always export the schema, document types, and repository in `libs/data-access/src/<entity>/index.ts` so they can be bundled correctly.
+### Mongoose Schema Template (`libs/data-access/src/<entity>/<entity>.schema.ts`)
+```typescript
+import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
+import mongoose, { HydratedDocument } from 'mongoose';
+
+export type FeedbackDocument = HydratedDocument<Feedback>;
+
+@Schema({ timestamps: true })
+export class Feedback {
+  @Prop({ required: true })
+  title: string;
+
+  @Prop({ type: Boolean, default: false })
+  isDeleted: boolean;
+
+  @Prop({ type: Date })
+  deletedAt: Date;
+}
+
+export const FeedbackSchema = SchemaFactory.createForClass(Feedback);
+```
+
+### Database Repository Template (`libs/data-access/src/<entity>/<entity>.repository.ts`)
+```typescript
+import { Injectable } from '@nestjs/common';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model } from 'mongoose';
+import { BaseRepo } from '../repository/base.repo';
+import { Feedback, FeedbackDocument } from './feedback.schema';
+
+@Injectable()
+export class FeedbackRepository extends BaseRepo<FeedbackDocument> {
+  constructor(@InjectModel(Feedback.name) private readonly feedbackModel: Model<FeedbackDocument>) {
+    super(feedbackModel);
+  }
+}
+```
+
+Key constraints:
+- **Soft Delete:** Every schema MUST declare `isDeleted: boolean` (default: `false`) and `deletedAt: Date` (default: `null`) to correctly inherit from `BaseRepo`.
+- **BaseRepo Imports:** Repository files must import `BaseRepo` relative to the entity folder using:
+  `import { BaseRepo } from '../repository/base.repo';`
+- **Barrel Export:** Always export the schema, document types, and repository in `libs/data-access/src/<entity>/index.ts` so they can be bundled correctly.
 
 
 ---
