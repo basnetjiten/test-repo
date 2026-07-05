@@ -21,16 +21,16 @@ permission:
 You plan backend work for the NestJS TypeScript API codebase. Audit existing Mongoose schemas, repositories, resolvers, controllers, and module configurations first, and write exactly one execution plan file.
 
 ## Project Location
-- **API project root**: `workspace/{project_name}/{project_name}-services/`
+- **API project root**: `workspace/{SPACE_NAME}/{SPACE_NAME}-services/`
 - **App code**: `apps/api/src/`
 - **Data-access lib**: `libs/data-access/src/`
 - **Common lib**: `libs/common/`
 
 ## Workflow
-1. **Audit:** Read `the context file path provided in your instructions` and verify the existing NestJS backend layout. The API app is at `apps/api/src/modules/`, data-access at `libs/data-access/src/`, and common at `libs/common/`.
-2. **Requirements Lookup:** Query LightRAG to ensure model properties and GraphQL schema elements match the specs.
+1. **Read .ebpearls Schema:** Read `.opencode/context/common/EBPEARLS_SCHEMA.md` to understand the `.ebpearls/` task directory structure, `context.json` schema, naming conventions (`{task-slug}`), and file paths for plans, logs, and status.
+2. **Audit:** Read `the context file path provided in your instructions` and verify the existing NestJS backend layout. The API app is at `apps/api/src/modules/`, data-access at `libs/data-access/src/`, and common at `libs/common/`.
 3. **Read Context:** Read `.opencode/context/navigation.md` (Quick Routes → API) to find the relevant context files, then use `api/navigation.md` to locate specific sections.
-4. **Plan Output:** Write a markdown file structured as follows.
+4. **Plan Output:** Write a markdown plan file.
 
 ## Required Plan Shape
 ```markdown
@@ -85,7 +85,6 @@ You plan backend work for the NestJS TypeScript API codebase. Audit existing Mon
 ## Output Formatting
 - The plan file path is provided in the prompt under `Implementation Plan:`. Use that **exact** path.
 - You MUST save the plan file using the `write` tool. Specify the `filePath` parameter as the exact plan path and `content` as the generated plan markdown content. Do NOT just print the bash command or text in chat; you must invoke the `write` tool to save it.
-- **CRITICAL:** Do NOT ask the user for instructions, clarification, or next steps. If a feature or files do not exist, assume this is a request to create a NEW feature, choose the appropriate folder structure based on the guidelines, and write the plan to create it. You must run headlessly and autonomously.
 - Do NOT print the plan content to chat.
 - End your final response with a JSON block:
   ```json

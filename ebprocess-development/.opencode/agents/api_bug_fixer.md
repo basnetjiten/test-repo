@@ -15,7 +15,7 @@ permission:
 You diagnose concrete backend NestJS bugs, identify controlling code paths, and apply minimal fixes.
 
 ## Project Location
-- **API project root**: `workspace/{project_name}/{project_name}-services/`
+- **API project root**: `workspace/{SPACE_NAME}/{SPACE_NAME}-services/`
 - **App code**: `apps/api/src/`
 - **Data-access lib**: `libs/data-access/src/`
 - **Common lib**: `libs/common/`

@@ -85,39 +85,32 @@ export const providers = [
 
 > **IMPORTANT**: Do NOT use the inline `providers: [...]` approach. Always create a separate `providers.ts` file.
 
-### Step 2: Register DB Schemas & Repositories
-Integrate the new schema and repository into the shared `data-access` library package:
+### Step 2: Register DB Schemas & Repositories (Dual Pattern)
 
-1. **`libs/data-access/src/data-access.models.ts`**:
+**Critical**: The project uses two registration patterns:
+- **`data-access.models.ts`** registers ONLY the `User` schema centrally. Do NOT add new schemas here.
+- **Per-module `mongoose-models.ts`** registers all other schemas (DeviceInfo, OTPRequest, LoginInfo, etc.) in each feature module's own file.
+
+For a new feature, register schemas in the feature module:
+
+1. **`apps/api/src/modules/<feature>/mongoose-models.ts`**:
    ```typescript
-   import { ModelDefinition } from '@nestjs/mongoose';
-   import { User, UserSchema } from './user';
-   import { NewEntity, NewEntitySchema } from './new-entity';
+   import { EntitySchema, Entity } from '@app/data-access';
    
-   export const dataAccessModels: ModelDefinition[] = [
-     { name: User.name, schema: UserSchema },
-     { name: NewEntity.name, schema: NewEntitySchema },
+   export const mongooseModels = [
+     { name: Entity.name, schema: EntitySchema },
    ];
    ```
+   Then import them in the feature module via `MongooseModule.forFeature(mongooseModels)`.
 
-2. **`libs/data-access/src/data-access.module.ts`**:
-   ```typescript
-   import { UsersRepository } from './user';
-   import { NewEntityRepository } from './new-entity';
-   
-   @Module({
-     imports: [MongooseModule.forFeature(dataAccessModels)],
-     providers: [UsersRepository, NewEntityRepository, DataAccessService],
-     exports: [UsersRepository, NewEntityRepository, MongooseModule, DataAccessService],
-   })
-   export class DataAccessModule {}
-   ```
-
-3. **`libs/data-access/src/index.ts`**:
+2. **`libs/data-access/src/index.ts`** (barrel export):
    ```typescript
    export * from './user';
    export * from './new-entity';
    ```
+   Add `export * from './new-entity';` so the barrel exports the schema and repository for other modules to import.
+
+3. **Feature module `providers.ts`**: Always list the repository explicitly in the providers array — do NOT rely on `DataAccessModule` exports. Repositories are imported from `@app/data-access` path alias.
 
 ### Step 3: Register Feature Module in Root
 Modify the main application module to import the new feature module.

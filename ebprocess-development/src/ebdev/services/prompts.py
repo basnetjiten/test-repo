@@ -45,6 +45,33 @@ PLATFORM_TECH_STACK: dict[str, str] = {
     ),
 }
 
+# ---------------------------------------------------------------------------
+# Platform-specific skill registries and path examples
+# ---------------------------------------------------------------------------
+PLATFORM_SKILLS: dict[str, list[str]] = {
+    "flutter": [
+        "feature-scaffolder/SKILL.md",
+        "api-integration/SKILL.md",
+        "state-management/SKILL.md",
+        "ui-generator/SKILL.md"
+    ],
+    "api": [
+        "nestjs-graphql-resolvers/SKILL.md",
+        "api-integration/SKILL.md"
+    ],
+    "web": [
+        "api-integration/SKILL.md"
+    ]
+}
+
+PLATFORM_PATH_EXAMPLES: dict[str, str] = {
+    "flutter": "lib/main.dart",
+    "api": "apps/api/src/main.ts",
+    "web": "src/pages/index.tsx",
+    "cms": "src/server.ts"
+}
+
+
 
 def to_container_path(path: Path) -> Path:
     """
@@ -76,99 +103,17 @@ def agent_instructions(job_context: JobContext, storage_dir: Path, platform: str
 
     # Planner instructions
     if "planner" in agent or agent == "plan":
+        skills_list = PLATFORM_SKILLS.get(plat, ["api-integration/SKILL.md"])
+        skills_str = "\n".join([f"  - For {plat.upper()}: " + ", ".join([f"read `/.opencode/skills/{s}`" for s in skills_list])])
         return f"""<{Prompts.INSTRUCTIONS_TAG}>
 {Prompts.PHASE_PLANNING}
 - GOAL: Create a comprehensive implementation plan based on the requirements in {context_path}.
-- REQUIREMENT: You MUST save the plan to {plan_path}.
-- REQUIRED ACTION: Call the `write` tool with `filePath` set to '{plan_path}' and `content` set to your generated plan markdown.
+- REQUIREMENT: You MUST save the plan using the `write` tool to the path specified under `Implementation Plan` ({plan_path}).
 - CRITICAL CONSTRAINT: Do NOT print the plan content in your chat response. Your chat response must contain ONLY the final JSON block. You MUST write the plan to the file using the `write` tool first, then output the final JSON block.
 - CRITICAL REQUIREMENT: In your very first step, you MUST use the `read` tool to inspect the guidelines inside the `/.opencode/skills/` directory for your platform:
-  - For Flutter: read `/.opencode/skills/feature-scaffolder/SKILL.md`, `/.opencode/skills/api-integration/SKILL.md`, `/.opencode/skills/state-management/SKILL.md`, `/.opencode/skills/ui-generator/SKILL.md`
-  - For NestJS/API: read `/.opencode/skills/nestjs-graphql-resolvers/SKILL.md`, `/.opencode/skills/api-integration/SKILL.md`
+{skills_str}
   Your plan MUST strictly adopt the exact folder paths, base classes, and structural layers defined in these skills. If your plan fails to use these paths and patterns, you have FAILED.
-
-<PLAN_EXPECTATIONS>
-Your plan MUST follow this exact Required Plan Shape (from flutter_planner.md). Every heading and field is mandatory — do not rename, reorder, or omit sections unless explicitly marked as scope-dependent:
-
-```markdown
-# Feature Plan
-
-**Scope**: `<full_feature|bug|enhancement|ui_only|data_only|graphql_only|custom>`
-**Type**: `<feature|bug|task>`
-**Title**: <ticket title>
-**Description**: <one-sentence summary>
-**Strategy**: <approach>
-**Justification**: <why this scope>
-**Target module**: <lib/features/...>
-**Tools**: <subagents to invoke — MUST include @flutter_domain, @flutter_data, @flutter_state, @flutter_ui for full_feature>
-**Orchestration**: <"Scaffold all layers first, then delegate to subagents for implementation">
-**Pattern ref**: <REAL file path from discovery, e.g. `lib/features/auth/presentation/blocs/login/login_cubit.dart` — `N/A` is ONLY allowed if `lib/features/` is empty>
-
----
-
-## Code Generation
-
-```yaml
-build_runner:   true | false
-intl_utils:     true | false   # true ONLY when new ARB/localization strings are introduced
-fluttergen:     true | false
-```
-
----
-
-## Technical Audit
-
-| Layer | Target File | Exists | Strategy |
-|---|---|---|---|
-| Domain entity | `domain/entities/<feature>_entity.dart` | ❌ | Create domain entity |
-| Domain repo | `domain/repositories/i_<feature>_repository.dart` | ❌ | Create repository interface |
-| Data model | `data/models/<feature>_model.dart` | ❌ | Create data model |
-| Data source | `data/sources/<feature>_source.dart` | ❌ | Create data source |
-| Data repo impl | `data/repositories/<feature>_repository_impl.dart` | ❌ | Create repository impl |
-| State | `presentation/cubit/<feature>_cubit.dart` + `_state.dart` | ❌ | Create cubit and state |
-| UI page | `presentation/pages/<feature>_page.dart` | ❌ | Create page |
-| UI widget | `presentation/widgets/<feature>_form.dart` | ❌ | Create form widget |
-| Route | `core/routes/app_router.dart` | ❌ | Register route |
-
----
-
-## Architecture Guards
-
-- Repositories return `EitherResponse<T>`. Use `processApiCall`.
-- Cubits use `handleAPICall`. Never `.fold()` in cubits.
-- Package imports: `package:<name>/`. No `../` across features.
-- DI: `@injectable` / `@lazySingleton` on all services.
-
----
-
-## Domain Layer
-<!-- REQUIRED for full_feature. List entity fields/types, repository method signatures. -->
-
-## Data Layer
-<!-- REQUIRED for full_feature. List model fields, source methods, repository methods. -->
-
-## State Layer
-<!-- REQUIRED for full_feature. List STATE FIELDS (name/type), METHODS, MIXINS, STATUS FIELDS. -->
-
-## UI Layer
-<!-- REQUIRED for full_feature. List custom widget mappings from ui-generator skill. Never use bare Flutter widgets. -->
-
-## Routing
-<!-- REQUIRED for full_feature. Specify where to register in app_router.dart. -->
-
-## Verification
-<!-- Include when specific test/analysis steps are needed. -->
-
-## Warnings
-<!-- Include when there are known risks or blockers. -->
-```
-</PLAN_EXPECTATIONS>
-
-EXAMPLE (use the exact markdown template shown above in PLAN_EXPECTATIONS):
-  Call the `write` tool with:
-  filePath: {plan_path}
-  content:
-    (The complete plan markdown with all required sections filled in, following the template above.)
+- Required Plan Shape: Adopt the exact heading styles, audit tables, and layout sections defined in your system instruction's Required Plan Shape.
 </{Prompts.INSTRUCTIONS_TAG}>"""
 
     # Bug fixer instructions
@@ -213,65 +158,21 @@ EXAMPLE (use the exact markdown template shown above in PLAN_EXPECTATIONS):
             offline_req = "- OFFLINE-FIRST ARCHITECTURE: Enforce local storage as the single source of truth. UI must read from/write to local DB (e.g. Drift/Hive/Isar). Save mutations locally with a 'pending' status and implement queue/sync mechanisms to pull/push server updates.\n"
 
         repo_path = to_container_path(Path(job_context.repo_path))
-
-        # Build subagent delegation list dynamically based on platform
-        if plat == "flutter":
-            subagent_delegation = (
-                "You have access to specialized subagents to delegate code implementation and validation tasks. You can run them using subagent task tools:\n"
-                "1. **Domain Subagent** (`flutter_domain`): Implement domain entities and repository interfaces.\n"
-                "2. **Data Subagent** (`flutter_data`): Implement remote/local data sources, models, and repository implementations.\n"
-                "3. **State Subagent** (`flutter_state`): Implement cubit/bloc state management implementation.\n"
-                "4. **UI Subagent** (`flutter_ui`): Implement page screens, widget layouts, and forms.\n"
-                "5. **UI Refiner** (`flutter_ui_refiner`): Polishes visual layout styles and design system tokens.\n"
-                "6. **Linter** (`flutter_linter`): Run this to fix static analysis issues on changed files."
-            )
-            linter_ref = "flutter_linter"
-        elif plat == "api":
-            subagent_delegation = (
-                "You have access to specialized subagents to delegate code implementation and validation tasks. You can run them using subagent task tools:\n"
-                "1. **Schema Builder** (`api_schema_builder`): Implement mongoose schemas, models, and data-access repositories.\n"
-                "2. **DTO Generator** (`api_dto_generator`): Implement REST DTOs and GraphQL types.\n"
-                "3. **Service Builder** (`api_service_builder`): Implement business logic services.\n"
-                "4. **Route Builder** (`api_route_builder`): Implement REST controllers and GraphQL resolvers.\n"
-                "5. **Module Integrator** (`api_module_integrator`): Implement module wiring and dependency registrations.\n"
-                "6. **Linter** (`api_linter`): Run this to fix linting and compilation errors on changed files."
-            )
-            linter_ref = "api_linter"
-        else:
-            subagent_delegation = (
-                "You have access to specialized subagents to delegate verification and refining tasks. You can run them using subagent task tools:\n"
-                "1. **Linter** (`linter`): Run this subagent to verify formatting and fix static analysis errors on your changed files.\n"
-                "2. **UI Refiner** (`ui_refiner`): Run this subagent to polish styling, spacing, and design system tokens on visual layouts."
-            )
-            linter_ref = "linter"
+        example_file = PLATFORM_PATH_EXAMPLES.get(plat, "src/index.ts")
 
         return f"""<{Prompts.INSTRUCTIONS_TAG}>
 {Prompts.PHASE_IMPLEMENTATION}
 
 <REQUIREMENTS>
-- You MUST read the requirements from the context file found at {context_path}
-- You MUST implement the plan found at {plan_path}
-- If that plan file does not exist, immediately output: {{"status": "error", "reason": "{ErrorMessages.PLAN_MISSING.format(plan_path=plan_path)}"}} and stop.
-- CRITICAL: You MUST use absolute paths starting with '{repo_path}/' for all file operations in the `write`, `read`, `edit`, `grep`, and `glob` tools. Do NOT use relative paths (e.g., use '{repo_path}/lib/main.dart' instead of 'lib/main.dart') in tool arguments, as relative paths will resolve to the incorrect default directory (/app).
+- Read the requirements from the context file found at {context_path}.
+- Implement the plan found at {plan_path}. If that plan file does not exist, immediately output: {{"status": "error", "reason": "{ErrorMessages.PLAN_MISSING.format(plan_path=plan_path)}"}} and stop.
+- CRITICAL: You MUST use absolute paths starting with '{repo_path}/' for all file operations in the `write`, `read`, `edit`, `grep`, and `glob` tools. Do NOT use relative paths (e.g., use '{repo_path}/{example_file}' instead of '{example_file}') in tool arguments, as relative paths will resolve to the incorrect default directory (/app).
 - CRITICAL: You MUST anchor all commands and file operations in the repository workspace. Run `cd {repo_path}` before editing, creating files or running compilation/test tools.
 - Edit or write files under the repository workspace directory to implement the plan.
 - You MUST create or edit at least one source file inside the repository (e.g. inside `lib/`, `src/`, `apps/`, or `libs/`). Writing only to plan or metadata files does NOT count.
-- CRITICAL: In your first step, read the skills in `/.opencode/skills/` for your platform-specific patterns:
-  - For Flutter: read `/.opencode/skills/api-integration/SKILL.md` and `/.opencode/skills/state-management/SKILL.md` and `/.opencode/skills/ui-generator/SKILL.md`
-  - For NestJS/API: read `/.opencode/skills/nestjs-graphql-resolvers/SKILL.md` and `/.opencode/skills/api-integration/SKILL.md`
-  You MUST strictly follow the structural rules, file locations, coding patterns, and naming conventions defined in those skills.
 {mock_req}{offline_req}</REQUIREMENTS>
 
-<SUBAGENT_DELEGATION>
-{subagent_delegation}
-</SUBAGENT_DELEGATION>
-
-<VERIFICATION_PROTOCOL>
-1. Before finishing, run `git status` or inspect the file system (e.g. via `ls` or `find`) to verify files under the repository workspace have changed.
-2. If `git` is unavailable on the system, verify file existence manually. If no files have changed, you have FAILED. Create the missing files and try again.
-3. Delegate verification tasks to the relevant subagent (e.g. run the `{linter_ref}` subagent to analyze your changes) before completing.
-4. Before declaring success, search for any "TODO" tags and ensure they are addressed.
-</VERIFICATION_PROTOCOL>
+- Refer to your system instructions for details on subagent delegation, platform rules/skills, and verification protocols.
 </{Prompts.INSTRUCTIONS_TAG}>"""
 
 

@@ -16,7 +16,7 @@ permission:
 You extract or refine backend localizations, updating message key maps in English and Nepali.
 
 ## Project Location
-- **API project root**: `workspace/{project_name}/{project_name}-services/`
+- **API project root**: `workspace/{SPACE_NAME}/{SPACE_NAME}-services/`
 - **i18n directory**: `apps/api/src/i18n/` (relative to the API project root)
 - **English catalog**: `apps/api/src/i18n/en/` (JSON files)
 - **Nepali catalog**: `apps/api/src/i18n/ne/` (JSON files)

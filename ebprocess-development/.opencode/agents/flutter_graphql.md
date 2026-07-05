@@ -25,11 +25,11 @@ You work only on `.graphql` operations and the GraphQL schema path used by this 
 ## Workflow
 1. Read `flutter/navigation.md` (Layer-specific patterns → GraphQL section) to find the relevant pattern files before writing anything.
 2. Load the `api-integration` skill to confirm GraphQL operation conventions before writing any file.
-2. Read the `## GraphQL Changes` section in the plan and the nearest existing operation pattern.
-3. Refresh the schema with `graphql_tool_fetch_schema` only when the local schema is missing or clearly outdated.
-4. Check the local schema (`lib/graphql/schema.graphql`) to confirm the operation exists before writing it.
-5. If the operation **does not exist in the schema yet** (backend not implemented), write a placeholder file instead of a real operation — see the Placeholder rule below.
-6. Keep one operation per file and match variable names to the calling data-layer contract.
+3. Read the `## GraphQL Changes` section in the plan and the nearest existing operation pattern.
+4. Refresh the schema with `graphql_tool_fetch_schema` only when the local schema is missing or clearly outdated.
+5. Check the local schema (`lib/graphql/schema.graphql`) to confirm the operation exists before writing it.
+6. If the operation **does not exist in the schema yet** (backend not implemented), write a placeholder file instead of a real operation. See the Placeholder rule below.
+7. Keep one operation per file and match variable names to the calling data-layer contract.
 
 ## Rules
 - Prefer reusing existing fragments when the field set already exists.

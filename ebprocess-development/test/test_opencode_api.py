@@ -6,6 +6,7 @@
 """
 
 import asyncio
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -19,12 +20,7 @@ from ebdev.models.schemas import SprintTicket, JobContext, GraphState, JobResult
 
 
 def _discover_space_name() -> str:
-    workspace_dir = Path(config.WORKSPACE_DIR)
-    if workspace_dir.exists():
-        for child in workspace_dir.iterdir():
-            if child.is_dir():
-                return child.name
-    return "project"
+    return os.environ.get("SPACE_NAME", "ebmobileapp")
 
 
 async def run_test():

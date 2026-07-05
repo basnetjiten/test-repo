@@ -67,12 +67,9 @@ async def prepare_node(state: GraphState) -> GraphState:
 
     try:
         # 1. Resolve Parent Workspace
-        if ctx.project_repo:
-            repo_slug = ctx.project_repo.rstrip("/").split("/")[-1].replace(".git", "")
-        else:
-            repo_slug = "local-project"
-
-        workspace_id = ctx.space_name or repo_slug
+        # space_name is guaranteed non-empty by JobContext validation; it drives
+        # the workspace directory directly.
+        workspace_id = ctx.space_name
 
         if ctx.repo_path:
             repo_path = Path(ctx.repo_path)

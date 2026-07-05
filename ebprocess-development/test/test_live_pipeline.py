@@ -32,12 +32,7 @@ from ebdev.models.schemas import GraphState, JobContext, SprintTicket
 # ---------------------------------------------------------------------------
 # Real project space — drives workspace/<SPACE_NAME>/ and .opencode/<SPACE_NAME>/
 def _discover_space_name() -> str:
-    workspace_dir = Path(config.WORKSPACE_DIR)
-    if workspace_dir.exists():
-        for child in workspace_dir.iterdir():
-            if child.is_dir():
-                return child.name
-    return "project"
+    return os.environ.get("SPACE_NAME", "ebmobileapp")
 
 
 SPACE_NAME = _discover_space_name()
@@ -64,13 +59,20 @@ def _clean_project_workspace() -> None:
     Remove only this project's scoped directories so the run starts clean.
 
     Removes:
-      - workspace/<SPACE_NAME>/api/
-      - workspace/<SPACE_NAME>/flutter/
+      - workspace/<SPACE_NAME>/ebmobileapp-services/
+      - workspace/<SPACE_NAME>/ebmobileapp_flutter/
       - workspace/<SPACE_NAME>/.ebpearls/     (plans, tasks, SPOQ — not sessions.json / jobs.json)
     """
     base_workspace = Path(config.WORKSPACE_DIR) / SPACE_NAME
-    for platform in ("api", "flutter"):
-        plat_dir = base_workspace / platform
+    proj_name = SPACE_NAME.lower().replace("-", "_")
+    dirs_to_clean = [
+        base_workspace / "api",
+        base_workspace / "flutter",
+        base_workspace / f"{SPACE_NAME}-services",
+        base_workspace / f"{proj_name}_flutter",
+        base_workspace / f"{SPACE_NAME}-web",
+    ]
+    for plat_dir in dirs_to_clean:
         if plat_dir.exists():
             shutil.rmtree(plat_dir)
             print(f"  Cleaned workspace: {plat_dir}")

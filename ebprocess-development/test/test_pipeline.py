@@ -2,6 +2,7 @@
 """Integration test script to dry-run the concurrent LangGraph orchestration pipeline."""
 
 import asyncio
+import os
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -14,12 +15,7 @@ from ebdev.models.schemas import SprintTicket, JobContext, GraphState, JobResult
 
 
 def _discover_space_name() -> str:
-    workspace_dir = Path(config.WORKSPACE_DIR)
-    if workspace_dir.exists():
-        for child in workspace_dir.iterdir():
-            if child.is_dir():
-                return child.name
-    return "project"
+    return os.environ.get("SPACE_NAME", "ebmobileapp")
 
 
 

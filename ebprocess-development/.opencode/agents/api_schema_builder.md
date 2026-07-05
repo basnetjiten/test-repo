@@ -33,122 +33,30 @@ All database access structures must reside in `libs/data-access/` (relative to <
 
 ## 2. Coding Patterns & Templates
 
-### A. Mongoose Schema Definition
-Use `@nestjs/mongoose` class decorators.
-- Use `HydratedDocument` for typing the Mongoose document (type: `<Entity> & Document`).
-- Implement soft-delete tracking fields: `isDeleted: boolean` (default: false) and `deletedAt: Date` (default: null).
-- Use `@Schema({ timestamps: true, autoIndex: true })` decorator.
-- For ObjectId references, use `mongoose.Schema.Types.ObjectId` with `ref` option.
-- Define database indices at the bottom using `Schema.index(...)` with named indices.
-- Import enums from `@app/common/enum/` path aliases for status/type fields.
+> [!IMPORTANT]
+> You MUST read the custom skill `nestjs-api-development` (`.opencode/skills/api-scaffolder/SKILL.md`) to get the exact code templates for Schemas and Repositories.
+>
+> Key constraints:
+> - **Soft Delete:** Every schema MUST declare `isDeleted: boolean` (default: `false`) and `deletedAt: Date` (default: `null`) to correctly inherit from `BaseRepo`.
+> - **BaseRepo Imports:** Repository files must import `BaseRepo` relative to the entity folder using:
+>   `import { BaseRepo } from '../repository/base.repo';`
+> - **Barrel Export:** Always export the schema, document types, and repository in `libs/data-access/src/<entity>/index.ts` so they can be bundled correctly.
 
-**Real-world example (`libs/data-access/src/user/user.schema.ts`):**
-```typescript
-import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { LocationType } from '@app/common/enum/location-type.enum';
-import { LoginFlowType } from '@app/common/enum/login-flow-type.enum';
-import { UserStatus } from '@app/common/enum/user-status.enum';
-import mongoose, { Document } from 'mongoose';
-
-export type UserDocument = User & Document;
-
-@Schema({ timestamps: true, autoIndex: true })
-export class User {
-  @Prop({ required: true })
-  authProvider: AuthProviderType;
-
-  @Prop({ unique: true, required: true })
-  authProviderId: string;
-
-  @Prop()
-  firstName: string;
-
-  @Prop()
-  lastName: string;
-
-  @Prop()
-  profileImage: string;
-
-  @Prop({ type: String, default: UserStatus.email_verification_pending })
-  status: UserStatus;
-
-  @Prop({ type: String, default: LoginFlowType.otp })
-  loginFlowType: LoginFlowType;
-
-  @Prop({ default: false })
-  isDeleted: boolean;
-
-  @Prop({ default: null })
-  deletedAt: Date;
-}
-
-export type UserDocument = User & Document;
-export const UserSchema = SchemaFactory.createForClass(User);
-
-UserSchema.index(
-  { authProviderId: 1, authProvider: 1, deletedAt: 1 },
-  { name: 'users_auth_provider', background: true },
-);
-```
-
-### B. Repository Class
-Repositories MUST extend `BaseRepo<EntityDocument>` to inherit pagination, soft delete, and aggregate queries.
-- Inject the model using `@InjectModel(<Entity>.name)`.
-- Import `BaseRepo` via relative path: `import { BaseRepo } from '../repository/base.repo';`.
-- Use path alias `@app/data-access` when importing across modules.
-
-**Real-world example (`libs/data-access/src/user/user.repository.ts`):**
-```typescript
-import { Injectable } from '@nestjs/common';
-import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
-import { BaseRepo } from '../repository/base.repo';
-import { User, UserDocument } from './user.schema';
-
-@Injectable()
-export class UsersRepository extends BaseRepo<UserDocument> {
-  constructor(
-    @InjectModel(User.name)
-    private readonly userModel: Model<UserDocument>,
-  ) {
-    super(userModel);
-  }
-
-  async findByEmail(email: string) {
-    return this.findOne({ authProviderId: email, deletedAt: null });
-  }
-
-  async getAllUsers(pageMeta: PaginationOptions, filter = {}) {
-    return this.findWithPaginate(filter, pageMeta, { ...this.projection, profileImage: 1 });
-  }
-}
-```
-
-### C. Feature Export (`libs/data-access/src/<entity>/index.ts`):
-```typescript
-export * from './<entity>.schema';
-export * from './<entity>.repository';
-// Export any additional schemas/repos in the folder
-export * from './related.schema';
-export * from './related.repository';
-```
 
 ---
 
-## 3. Global Registration Workflow
+## 3. Registration Workflow
 
-You must wire the new models and repositories into the shared `data-access` library:
+**CRITICAL — Dual Registration Pattern:**
+- **`data-access.models.ts`** registers ONLY the `User` schema centrally. Do NOT add new schemas here.
+- **Per-module `mongoose-models.ts`** registers all other schemas in each feature module.
 
-1. **`libs/data-access/src/data-access.models.ts`**:
-   - Import the Entity class and EntitySchema.
-   - Add `{ name: Entity.name, schema: EntitySchema }` to the `dataAccessModels` array.
+When creating a new schema and repository:
 
-2. **`libs/data-access/src/data-access.module.ts`**:
-   - Import the Repository.
-   - Add the Repository class to `providers` and `exports` arrays.
-
-3. **`libs/data-access/src/index.ts`**:
-   - Add a line to export the new subdirectory: `export * from './<feature>';`.
+1. **Create schema + repository** in `libs/data-access/src/<entity>/`
+2. **Add barrel export** in `libs/data-access/src/index.ts`: `export * from './<entity>';`
+3. **Register the schema** in the feature module's `apps/api/src/modules/<feature>/mongoose-models.ts` — do NOT add to `data-access.models.ts`
+4. **Register the repository** in the feature module's `apps/api/src/modules/<feature>/providers.ts`
 
 ---
 

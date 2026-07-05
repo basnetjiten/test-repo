@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Dict, List, Optional
-
+from ebdev.config import config
 from pydantic import BaseModel, Field, model_validator
 
 # ---------------------------------------------------------------------------
@@ -125,6 +125,24 @@ class JobContext(BaseModel):
         _resolve_feature_name(data)
         return data
 
+    @model_validator(mode="after")
+    def _validate_required_fields(self) -> "JobContext":
+        """
+        Enforce required-field constraints after assignment.
+
+        - ``space_name`` must be a non-empty, non-whitespace string. It drives
+          all workspace and storage path resolution, so a missing value would
+          silently produce a literal ``"project"`` workspace and corrupt
+          multi-project isolation.
+        """
+        if not isinstance(self.space_name, str) or not self.space_name.strip():
+            raise ValueError(
+                "JobContext.space_name must be a non-empty, non-whitespace string. "
+                "It is the project identifier that drives workspace and storage path "
+                "resolution and must be supplied by the upstream caller (n8n/Jira)."
+            )
+        return self
+
     # ------------------------------------------------------------------
     # Public helpers
     # ------------------------------------------------------------------
@@ -145,7 +163,7 @@ class JobContext(BaseModel):
         Path
             Resolved path: ``<repo_root>/.ebpearls/``
         """
-        from ebdev.config import config
+       
         repo_path = Path(self.repo_path)
         workspace_dir = Path(config.WORKSPACE_DIR).resolve()
 
@@ -162,13 +180,13 @@ class JobContext(BaseModel):
 
     def platform_dir_name(self, platform: str) -> str:
         """Get the customized directory name for a platform under multi-platform workspaces."""
-        proj_name = (self.space_name or "project").lower().replace("-", "_")
+        proj_name = self.space_name.lower().replace("-", "_")
         if platform == "api":
-            return f"{self.space_name or 'project'}-services"
+            return f"{self.space_name}-services"
         elif platform == "flutter":
             return f"{proj_name}_flutter"
         elif platform == "web":
-            return f"{self.space_name or 'project'}-web"
+            return f"{self.space_name}-web"
         return f"{proj_name}_{platform}"
 
     def platform_path(self, platform: str) -> Path:
@@ -254,8 +272,6 @@ class JobResult(BaseModel):
                 data["job_id"] = data["ticket_id"]
             elif "ticket_id" not in data and "job_id" in data:
                 data["ticket_id"] = data["job_id"]
-            if "space_name" not in data:
-                data["space_name"] = "default"
 
             for list_field in ("errors", "warnings"):
                 if list_field in data and isinstance(data[list_field], list):
