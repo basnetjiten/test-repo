@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 import httpx
 
 from ebdev.models.schemas import JobResult
-from ebdev.services import db
+from ebdev.services import checkpoint, db
 
 if TYPE_CHECKING:
     from ebdev.models.schemas import GraphState
@@ -88,6 +88,15 @@ async def finalize_node(state: GraphState) -> GraphState:
                 logger.info("Callback successful: %d", response.status_code)
         except httpx.HTTPError as e:
             logger.warning("Callback failed: %s", e)
+
+    # 3. Clean up checkpoint thread (short-term, thread-scoped memory no
+    #    longer needed once the job is complete — keeps storage bounded).
+    try:
+        await checkpoint.cleanup_thread(f"thread-{ctx.ticket_id}")
+    except Exception:
+        logger.warning(
+            "Checkpoint cleanup failed for %s (non-critical).", ctx.ticket_id
+        )
 
     duration = round(time.time() - start_time, 2)
     logger.info("Done in %ss.", duration)

@@ -64,7 +64,325 @@ Each `generate_node` invocation dispatches a builder agent, which writes code an
 
 ---
 
-## 2. Multi-Project Workspace Isolation
+## 2. LangGraph Checkpointing & State Persistence
+
+The pipeline is built on LangGraph's native **checkpointing** system, which persists the full `GraphState` after every node transition. This is what enables long-running SPOQ epic executions to survive process restarts and resume from the exact last node without re-running completed work.
+
+### 2.1 Core Concept: Thread ID as Memory Pointer
+
+Every pipeline execution is keyed to a unique **`thread_id`** — a string that acts as a stable "memory pointer" into the checkpointer database. The pipeline uses LangGraph's state query API to decide whether to resume or start fresh:
+
+```python
+# api/main.py:94-155
+config = {"configurable": {"thread_id": f"thread-{request.ticket_id}"}}
+
+# Check if a checkpoint exists for this thread
+existing_state = await graph.aget_state(config)
+
+if existing_state is not None and existing_state.next:
+    if request.resume:          # resume=True (default)
+        # None input = load last checkpoint & continue from interrupted node
+        final_state = await graph.ainvoke(None, config=config)
+    else:                       # resume=False — clear & start fresh
+        await checkpointer.adelete_thread(f"thread-{request.ticket_id}")
+        final_state = await graph.ainvoke(initial_state, config=config)
+else:
+    final_state = await graph.ainvoke(initial_state, config=config)
+```
+
+The `thread_id` is derived from the ticket identifier (e.g. `thread-ENQ-5`). The `ExecutePipelineRequest` model carries a `resume: bool = True` field. When the same `thread_id` is used again:
+- **Existing thread + `resume=True`**: `graph.aget_state()` finds pending nodes → `graph.ainvoke(None, config)` loads the last checkpoint and resumes from the interrupted node's outbound edge.
+- **Existing thread + `resume=False`**: Thread history is cleared via `adelete_thread()`, then execution starts fresh.
+- **New thread**: Execution starts fresh from the entry point (`prepare_node`).
+
+This means **no external state tracking is needed** to know "where are we in the pipeline?" — the checkpoint history is the single source of truth.
+
+### 2.2 Checkpointer Backends
+
+The graph is compiled with a **checkpointer** (`src/ebdev/core/graph.py:277-432`):
+
+| Backend | Storage | Persistence | When Used |
+|:---|:---|:---|:---|
+| **`ResilientPostgresSaver`** | PostgreSQL database | Survives restarts | Production — `POSTGRES_URL` is set and Postgres is reachable |
+| **`MemorySaver`** (also `InMemorySaver`) | In-memory dict | Lost on process exit | Development/testing — Postgres unconfigured or unreachable |
+
+`ResilientPostgresSaver` is a **retry-wrapping proxy** around LangGraph's `AsyncPostgresSaver` that inherits from `BaseCheckpointSaver` (required by LangGraph's `isinstance` validation). It adds exponential-backoff retry logic (max 3 attempts) to all six checkpoint operations, transparently recovering from transient Postgres errors (`AdminShutdown`, `OperationalError`, `InterfaceError`):
+
+| Proxied Method | Purpose |
+|:---|:---|
+| `aget_tuple(config)` | Load latest or specific checkpoint for a thread |
+| `aput(config, checkpoint, metadata, new_versions)` | Persist a checkpoint at a super-step boundary |
+| `aput_writes(config, writes, task_id, task_path)` | Persist intermediate node writes (fault-tolerance) |
+| `alist(config, *, filter, before, limit)` | List checkpoint history for a thread |
+| `adelete_thread(thread_id)` | Delete all checkpoints + writes for a thread |
+| `asetup()` | Create tables if needed |
+
+```mermaid
+graph TD
+    A["build_graph()"] --> B{"POSTGRES_URL set?"}
+    B -->|No| C["MemorySaver"]
+    B -->|Yes| D{"Postgres reachable?"}
+    D -->|No| C
+    D -->|Yes| E["ResilientPostgresSaver(AsyncPostgresSaver + pool)"]
+    C --> F["graph compiled<br>(checkpointer=MemorySaver)"]
+    E --> G["graph compiled<br>(checkpointer=ResilientPostgresSaver)"]
+
+    style A fill:#0F172A,stroke:#38BDF8,stroke-width:2px,color:#fff
+    style C fill:#991B1B,stroke:#F87171,stroke-width:2px,color:#fff
+    style E fill:#065F46,stroke:#10B981,stroke-width:2px,color:#fff
+    style F fill:#991B1B,stroke:#F87171,stroke-width:2px,color:#fff
+    style G fill:#065F46,stroke:#10B981,stroke-width:2px,color:#fff
+```
+
+The underlying `AsyncPostgresSaver` uses an `AsyncConnectionPool` (`psycopg_pool`, min=1, max=10 connections) with `autocommit=True`.
+
+Checkpoints are persisted with `durability="async"` — writes happen asynchronously while the next node executes, giving a good balance of performance and persistence. If the process crashes mid-step, at most one node's progress is lost and the graph resumes from the last successful checkpoint.
+
+### 2.3 What Gets Checkpointed — The Full `GraphState`
+
+After every node (prepare, orchestrate, plan, generate, validate, contract, repair, publish, finalize), the **entire** `GraphState` Pydantic model is serialized and stored. This includes:
+
+| Group | Fields | Why It Matters for Resumption |
+|:---|:---|:---|
+| **Execution context** | `context` (full `JobContext` with ticket, repo_path, platforms, feature_name) | Knows *what* is being built and *where* |
+| **Strategy** | `strategy` (execution_mode, complexity, max_repair_iterations) | Knows *how* to execute |
+| **Wave progress** | `current_stage` (wave index), `spoq_tasks[]` (with per-task `status`: pending/in_progress/completed/blocked) | Knows *exactly which wave and tasks* are done vs remaining |
+| **Platform state** | `platform_results`, `done_platforms`, `failed_platforms` | Per-platform build outcome tracking |
+| **Session handles** | `opencode_session_ids` (dict mapping platform to OpenCode session ID) | Enables resuming LLM conversations instead of restarting |
+| **Shared context** | `shared_context` (arbitrary dict for cross-node data) | Carries data between waves (e.g. API contract URLs) |
+| **Progress flags** | `done`, `failed`, `last_node`, `status_message`, `retry_count` | Routing decisions and status reporting |
+
+> [!NOTE]
+> The `context.validation_errors` and `context.repair_iteration` fields track repair-loop state within a single run. These are included in the checkpoint so that a resumed run knows its remaining repair budget.
+
+### 2.4 Checkpoint Storage — Postgres Database Schema
+
+The `AsyncPostgresSaver` creates and manages three tables in the configured Postgres database:
+
+| Table | Purpose | Content |
+|:---|:---|:---|
+| **`checkpoints`** | Timestamped state snapshots | Serialized `GraphState` + metadata (checkpoint_id, thread_id, parent_checkpoint_id, step, node name) |
+| **`checkpoint_writes`** | Pending writes | Channel writes queued between nodes (ensures no data loss during transitions) |
+| **`checkpoint_blobs`** | Channel blob storage | Large binary channel values referenced by checkpoints |
+
+These tables are **managed entirely by LangGraph internally** — application code never writes to them directly. The `saver.setup()` call in `graph.py:272` creates them automatically on first run.
+
+Additionally, a companion **`jobs`** table (managed by `src/ebdev/services/db.py`) stores job-level metadata for external visibility:
+
+```sql
+CREATE TABLE IF NOT EXISTS jobs (
+    job_id VARCHAR(255) PRIMARY KEY,
+    status VARCHAR(50),          -- in_progress / complete / failed
+    summary TEXT,
+    errors TEXT[],
+    warnings TEXT[],
+    opencode_session_id VARCHAR(255),
+    jira_id VARCHAR(255),
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+);
+
+```
+
+### 2.4.1 Checkpoint Lifecycle Management
+
+Checkpoint lifecycle is managed by `src/ebdev/services/checkpoint.py`, which provides:
+
+| Function | Purpose |
+|:---|:---|
+| `cleanup_thread(thread_id)` | Deletes all checkpoints + writes for a completed thread via `adelete_thread()`. Respects the `CHECKPOINT_CLEANUP_ON_COMPLETE` env var (default `true`). Skips gracefully for `MemorySaver` (no persistent storage to clean). |
+| `get_thread_history(thread_id, limit)` | Returns timestamped checkpoint history for time-travel debugging and audit trails. |
+
+Cleanup is called from `finalize_node` after the job completes — short-term thread-scoped memory is no longer needed once the pipeline finishes, so checkpoints are deleted to prevent unbounded storage growth. The compact `jobs` table row is retained for audit.
+
+### 2.5 Resumption Mechanism — Step by Step
+
+The `execute_pipeline` endpoint (`src/ebdev/api/main.py:94`) implements **checkpoint-aware resume** using LangGraph's native state query. Before executing, it calls `graph.aget_state(config)` to determine whether a checkpoint exists:
+
+* **No checkpoint**: Starts fresh — `graph.ainvoke(initial_state, config)`
+* **Checkpoint with pending nodes + `resume=True`**: Resumes — `graph.ainvoke(None, config)` (LangGraph loads the last checkpoint state and continues from where it was interrupted)
+* **Checkpoint with pending nodes + `resume=False`**: Clears thread history via `adelete_thread()`, then starts fresh
+
+The `ExecutePipelineRequest` Pydantic model includes a `resume: bool = True` field to control this behavior. The response includes `"resumed": true/false` for caller visibility.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant User as User / n8n
+    participant API as FastAPI (Port 8001)
+    participant Graph as LangGraph Engine
+    participant Check as Checkpointer DB
+
+    Note over User,Check: First Execution (new thread)
+    User->>API: POST /execute (ticket_id = "ENQ-5")
+    API->>Graph: graph.aget_state(config) → None (no checkpoint)
+    API->>Graph: graph.ainvoke(initial_state, config)
+    Graph->>Check: Save checkpoint after prepare_node
+    Note over Graph: Enter orchestrate_node
+    Graph->>Check: Save checkpoint after orchestrate_node
+    Note over Graph: Enter plan_node ... [crash / restart]
+    Graph--xAPI: Process killed
+
+    Note over User,Check: Resumption (same thread, after restart, resume=True)
+    User->>API: POST /execute (ticket_id = "ENQ-5", resume=True)
+    API->>Graph: graph.aget_state(config) → FOUND (next: ["generate_node"])
+    API->>Graph: graph.ainvoke(None, config) ← None = resume from last checkpoint
+    Graph->>Check: Load checkpoint → restore GraphState
+    Note over Graph: Skip plan_node → resume at generate_node's edge
+    Graph->>Check: Save new checkpoint after generate_node
+    Note over Graph: Continue normally through remaining nodes...
+
+    Note over User,Check: Fresh Start (same thread, resume=False)
+    User->>API: POST /execute (ticket_id = "ENQ-5", resume=False)
+    API->>Graph: graph.aget_state(config) → FOUND (next: ["generate_node"])
+    API->>Graph: checkpointer.adelete_thread("thread-ENQ-5")
+    Graph->>Check: All checkpoints + writes deleted
+    API->>Graph: graph.ainvoke(initial_state, config) ← start from scratch
+    Note over Graph: Enter prepare_node with fresh state...
+```
+
+**Key behaviors on resumption:**
+
+1. **`graph.aget_state(config)` checks for existing checkpoints** — returns `StateSnapshot` with `next` nodes (non-empty = interrupted, empty `()` = completed).
+2. **`graph.ainvoke(None, config)` resumes** — passing `None` as the input tells LangGraph to load the last checkpoint state and continue from the interrupted node's outbound edge.
+3. **Restores `GraphState`** — all task statuses, wave indices, and platform results are exactly as they were.
+4. **Skips completed nodes** — execution resumes from the edge *after* the last completed node, not from the entry point.
+5. **SPOQ tasks stay consistent** — `spoq_tasks[]` statuses are restored, so `get_state_active_tasks()` correctly identifies remaining work.
+6. **OpenCode sessions reconnect** — the `opencode_session_ids` dict is restored; builders can resume LLM conversations via `session_id` rather than restarting them.
+
+> [!NOTE]
+> When `resume=False`, the checkpointer's `adelete_thread()` is called to purge all checkpoints and writes for the thread before starting fresh. This is distinct from the `cleanup_thread()` call in `finalize_node` — the latter runs *after* successful completion, while the former is a deliberate "start over" action requested by the caller.
+
+### 2.6 SPOQ Wave Resumption in Detail
+
+The SPOQ execution mode most benefits from checkpointing because it runs multiple waves over extended periods:
+
+```
+Wave 0: API contract definitions     → checkpoint
+Wave 1: API + Flutter implementation  → checkpoint (survives restart here)
+Wave 2: End-to-end integration tests  → checkpoint
+Epic completion                       → final checkpoint
+```
+
+Consider an epic with 6 tasks across 3 waves. If the process crashes after completing Wave 1:
+
+| Component | State Before Crash | State After Resume |
+|:---|:---|:---|
+| `current_stage` | `1` (Wave 1 done) | `1` — resumes at Wave 2 |
+| `spoq_tasks[0]` (contract) | `completed` | `completed` — NOT re-run |
+| `spoq_tasks[1]` (api-impl) | `completed` | `completed` — NOT re-run |
+| `spoq_tasks[2]` (flutter-impl) | `completed` | `completed` — NOT re-run |
+| `spoq_tasks[3]` (integration test) | `pending` | `pending` — picked up by Wave 2 |
+| `platform_results` | `{"api": JobResult(...), "flutter": JobResult(...)}` | Fully restored |
+| `opencode_session_ids` | `{"api": "sess-123", "flutter": "sess-456"}` | Restored (can resume LLM chat) |
+
+The orchestrator node calls `get_state_active_tasks(state.spoq_tasks)` which scans task statuses — only `pending`/`blocked` tasks with all dependencies satisfied are dispatched. Since the DAG and statuses are checkpointed together, the topological wave computation is deterministic and idempotent.
+
+### 2.7 Dual-Database Model
+
+The system uses **two separate persistence layers** on the same PostgreSQL instance:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                   PostgreSQL (POSTGRES_URL)                      │
+├────────────────────────────┬────────────────────────────────────┤
+│   LangGraph Checkpointer    │         Application Jobs           │
+│   (auto-managed)            │         (manual via db.py)         │
+├─────────────────────────────┼────────────────────────────────────┤
+│ Table: checkpoints          │ Table: jobs                        │
+│ Table: checkpoint_writes    │                                    │
+│ Table: checkpoint_blobs     │                                    │
+├─────────────────────────────┼────────────────────────────────────┤
+│ Purpose:                    │ Purpose:                           │
+│ • Per-node state snapshots  │ • Job-level status for external    │
+│ • Resumption from last node │   monitoring/API responses          │
+│ • Thread isolation           │ • Session ID lookup by ticket     │
+│ • Fault-tolerant pending    │ • JSON fallback to .opencode/      │
+│   writes (aput_writes)      │ • Compact result retained for      │
+│ • LangGraph-internal only   │   audit after checkpoint cleanup   │
+├─────────────────────────────┼────────────────────────────────────┤
+│ Accessed by:                │ Accessed by:                       │
+│ • graph.ainvoke()           │ • update_job_status()              │
+│ • graph.aget_state()        │ • save_session_id()                │
+│ • graph.ainvoke(None, ...)  │ • get_session_id()                 │
+│ • ResilientPostgresSaver    │ • sync_state_to_db()               │
+│ • checkpoint.cleanup_thread │ • checkpoint.cleanup_thread        │
+│                             │ • checkpoint.get_thread_history    │
+└─────────────────────────────┴────────────────────────────────────┘
+
+Plus file-system artifacts (not Postgres):
+  workspace/{space}/.ebpearls/Epic-{id}/
+    ├── EPIC.md, {task}.md         ← Human-readable plans
+    ├── context_{platform}.json    ← Machine-readable context
+    └── journals/                  ← Confidence-scored session logs
+```
+
+| Layer | Storage | Lifespan | Purpose |
+|:---|:---|:---|:---|
+| **Checkpoints** (Postgres `checkpoints*` tables) | PostgreSQL | Temporary (cleaned on completion) | LangGraph-internal: resume execution from exact node, pending writes recovery |
+| **Jobs** (Postgres `jobs` table) | PostgreSQL | Persistent across restarts | Application-level: job status, session IDs, monitoring — retained after checkpoint cleanup |
+| **File artifacts** (`.ebpearls/`) | Filesystem | Permanent | Human-auditable: plans, journals, contexts |
+
+### 2.8 Durability, Cleanup & Lifecycle
+
+#### Durability Mode
+
+The pipeline runs with LangGraph's `durability="async"` mode (`src/ebdev/api/main.py:64`):
+
+| Mode | When Writes Persist | Performance | Data Loss Risk | When to Use |
+|:---|:---|:---|:---|:---|
+| `"exit"` | On graph exit only | Fastest | Cannot recover from mid-run crash | Not used |
+| **`"async"`** (current) | Asynchronously during next step | Good | At most 1 node's progress on crash | **Production default** |
+| `"sync"` | Synchronously before next step | Slowest | None | Critical-only steps |
+
+With `"async"`, if the process crashes mid-step, at most one node's progress is lost — the graph resumes from the last successfully-written checkpoint. This balances performance and fault tolerance for a development pipeline where recomputing one node is acceptable.
+
+#### Checkpoint Lifecycle
+
+```
+                     [job starts]
+                          │
+          ┌───────────────▼────────────────┐
+          │ graph.ainvoke(initial_state)    │
+          │ Each node transition creates a  │
+          │ checkpoint (checkpoints + writes)│
+          └───────────────┬────────────────┘
+                          │
+                ┌─────────▼──────────┐
+                │    job completes    │
+                └─────────┬──────────┘
+                          │
+                ┌─────────▼──────────┐
+                │  finalize_node:     │
+                │  checkpoint.        │
+                │  cleanup_thread()   │
+                │  → adelete_thread() │
+                └─────────┬──────────┘
+                          │
+          ┌───────────────▼────────────────┐
+          │ checkpoints table: emptied      │
+          │ checkpoint_writes: emptied      │
+          │ jobs table: compact result row  │
+          │   retained for audit            │
+          └────────────────────────────────┘
+```
+
+The `CHECKPOINT_CLEANUP_ON_COMPLETE` env var (default `true`, `src/ebdev/config.py:95`) controls whether checkpoints are deleted on completion. Set to `"false"` to retain checkpoint history for debugging or time-travel inspection.
+
+#### Resume vs Fresh Start
+
+The `resume` field on `ExecutePipelineRequest` (default `true`) controls how existing thread checkpoints are handled:
+
+| Scenario | `resume` | Behavior |
+|:---|:---|:---|
+| No checkpoint exists | ignored | Starts fresh from `prepare_node` |
+| Checkpoint exists, graph completed | ignored | Starts fresh from `prepare_node` |
+| Checkpoint exists, graph interrupted | `true` | `graph.ainvoke(None)` — resumes from last node |
+| Checkpoint exists, graph interrupted | `false` | `adelete_thread()` + `graph.ainvoke(initial_state)` — cleared + fresh |
+
+---
+
+## 3. Multi-Project Workspace Isolation
 
 Each project is identified by a **`space_name`** (e.g. `"ebsprinter"`, `"ebprocess"`, `"AgentSwipe"`). All pipeline nodes resolve storage paths through `JobContext.project_storage_dir()`, ensuring **zero cross-project collisions**.
 
@@ -96,7 +414,7 @@ workspace/                               ← runtime project checkouts
 
 ---
 
-## 3. Orchestration Strategies & Execution Modes
+## 4. Orchestration Strategies & Execution Modes
 
 The `orchestrate_node` parses ticket properties to choose an `OrchestrationStrategy`.
 
@@ -135,7 +453,7 @@ The `orchestrate_node` parses ticket properties to choose an `OrchestrationStrat
 
 ---
 
-## 4. Specialist Orchestrated Queuing (SPOQ)
+## 5. Specialist Orchestrated Queuing (SPOQ)
 
 SPOQ is a methodology (arXiv:2606.03115v1) for multi-agent software engineering. It combines wave-based topological dispatch, dual validation gates, confidence-scored session journals, and epic lifecycle management.
 
@@ -373,7 +691,7 @@ When all waves complete, the orchestrator produces `JOURNAL.md` — a chronologi
 
 ---
 
-## 5. Specialist Agent Pool & Execution Bridge
+## 6. Specialist Agent Pool & Execution Bridge
 
 All agent profiles live in `.opencode/agents/`. Primary agents are invoked directly by pipeline nodes. Subagents are delegated via `@agent-name` syntax.
 
@@ -460,7 +778,7 @@ Reusable capabilities live in `.opencode/skills/`:
 
 ---
 
-## 6. End-to-End Pipeline Execution Lifecycle
+## 7. End-to-End Pipeline Execution Lifecycle
 
 The sequence diagram below shows the runtime pipeline execution loop, mapping host HTTP requests to the stateful LangGraph engine, and subsequent REST/SSE interactions with the OpenCode container.
 
@@ -532,13 +850,15 @@ sequenceDiagram
     
     %% finalize phase
     Note over Graph,Workspace: 6. Finalization Phase
+    Graph->>Graph: Update job status in DB
+    Graph->>Graph: Cleanup checkpoint thread (adelete_thread)
     Graph->>FastAPI: Pipeline done (status & outputs)
-    FastAPI-->>User: Return response JSON (PR URLs & wave status summary)
+    FastAPI-->>User: Return response JSON (PR URLs, resumed flag, result)
 ```
 
 ---
 
-## 7. Key Data Schemas
+## 8. Key Data Schemas
 
 ### `JobContext` — Pipeline Execution Context
 
@@ -597,7 +917,7 @@ sequenceDiagram
 
 ---
 
-## 8. Project Codebase Layout
+## 9. Project Codebase Layout
 
 ```
 .
@@ -661,6 +981,7 @@ sequenceDiagram
         │   ├── flutter.py            ← FlutterStrategy
         │   └── api.py                ← ApiStrategy
         └── services/
+            ├── checkpoint.py           ← Checkpoint lifecycle management (cleanup, history)
             ├── db.py                 ← Job tracking & JSON fallback
             ├── git.py                ← Git repository, branch, and PR provider
             ├── opencode.py           ← SSE-streaming OpenCode client

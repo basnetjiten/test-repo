@@ -91,6 +91,11 @@ class Config:
         os.environ.get("SENTRY_TRACES_SAMPLE_RATE", "0.1")
     )
 
+    # Checkpoint Retention
+    CHECKPOINT_CLEANUP_ON_COMPLETE: bool = (
+        os.environ.get("CHECKPOINT_CLEANUP_ON_COMPLETE", "true").lower() != "false"
+    )
+
 
 # Unified config singleton instance
 config = Config()

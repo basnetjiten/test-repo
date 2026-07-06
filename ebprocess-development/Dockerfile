@@ -36,7 +36,7 @@ COPY --from=flutter-base /root/.pub-cache /root/.pub-cache
 ENV PATH="/opt/flutter/bin:/opt/flutter/bin/cache/dart-sdk/bin:/root/.pub-cache/bin:$PATH"
 
 # Install OpenCode client CLI globally
-RUN npm install -g opencode-ai
+RUN npm install -g opencode-ai@latest
 
 WORKDIR /app
 

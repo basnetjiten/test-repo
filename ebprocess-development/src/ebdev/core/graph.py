@@ -19,6 +19,7 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING
 
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 
@@ -51,6 +52,96 @@ logger = logging.getLogger(__name__)
 # Falls back to MemorySaver (in-memory) when POSTGRES_URL is unset or Postgres
 # is unreachable.
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Resilient Postgres wrapper — catches transient connection errors (e.g.
+# AdminShutdown after a server restart) and retries with exponential backoff.
+# ---------------------------------------------------------------------------
+class ResilientPostgresSaver(BaseCheckpointSaver):
+    """
+    Retry-wrapping proxy around ``AsyncPostgresSaver``.
+
+    Proxies the full ``BaseCheckpointSaver`` contract with exponential
+    backoff on transient ``psycopg.OperationalError`` exceptions:
+
+    * ``aget_tuple`` — load latest or specific checkpoint
+    * ``aput`` — persist a checkpoint at a super-step boundary
+    * ``aput_writes`` — persist intermediate node writes for fault tolerance
+    * ``alist`` — list checkpoint history for a thread
+    * ``adelete_thread`` — delete all checkpoints + writes for a thread
+    * ``asetup`` — create tables if needed
+    """
+
+    def __init__(self, pool, max_retries=3):
+        super().__init__()
+        self._saver = None
+        self._pool = pool
+        self._max_retries = max_retries
+
+    async def _get_saver(self):
+        if self._saver is None:
+            from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+            self._saver = AsyncPostgresSaver(self._pool)
+        return self._saver
+
+    async def aget_tuple(self, config):
+        import psycopg
+        for attempt in range(self._max_retries):
+            try:
+                saver = await self._get_saver()
+                return await saver.aget_tuple(config)
+            except psycopg.OperationalError:
+                if attempt == self._max_retries - 1:
+                    raise
+                await asyncio.sleep(2 ** attempt)
+
+    async def aput(self, config, checkpoint, metadata, new_versions):
+        import psycopg
+        for attempt in range(self._max_retries):
+            try:
+                saver = await self._get_saver()
+                return await saver.aput(config, checkpoint, metadata, new_versions)
+            except psycopg.OperationalError:
+                if attempt == self._max_retries - 1:
+                    raise
+                await asyncio.sleep(2 ** attempt)
+
+    async def asetup(self):
+        saver = await self._get_saver()
+        await saver.setup()
+
+    async def alist(self, config, *, filter=None, before=None, limit=None):
+        import psycopg
+        for attempt in range(self._max_retries):
+            try:
+                saver = await self._get_saver()
+                return await saver.alist(config, filter=filter, before=before, limit=limit)
+            except psycopg.OperationalError:
+                if attempt == self._max_retries - 1:
+                    raise
+                await asyncio.sleep(2 ** attempt)
+
+    async def aput_writes(self, config, writes, task_id, task_path=""):
+        import psycopg
+        for attempt in range(self._max_retries):
+            try:
+                saver = await self._get_saver()
+                return await saver.aput_writes(config, writes, task_id, task_path)
+            except psycopg.OperationalError:
+                if attempt == self._max_retries - 1:
+                    raise
+                await asyncio.sleep(2 ** attempt)
+
+    async def adelete_thread(self, thread_id):
+        import psycopg
+        for attempt in range(self._max_retries):
+            try:
+                saver = await self._get_saver()
+                return await saver.adelete_thread(thread_id)
+            except psycopg.OperationalError:
+                if attempt == self._max_retries - 1:
+                    raise
+                await asyncio.sleep(2 ** attempt)
 
 
 # ---------------------------------------------------------------------------
@@ -251,6 +342,47 @@ def build_graph() -> CompiledStateGraph:
     )
 
     if is_langgraph:
+        from ebdev.config import config
+        if config.POSTGRES_URL:
+            try:
+                from psycopg_pool import AsyncConnectionPool
+                from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
+                async def _ensure_tables():
+                    pool = AsyncConnectionPool(
+                        conninfo=config.POSTGRES_URL,
+                        min_size=1,
+                        max_size=1,
+                        max_lifetime=1800,
+                        max_idle=600,
+                        kwargs={"autocommit": True},
+                        open=False,
+                    )
+                    await pool.open()
+                    try:
+                        saver = AsyncPostgresSaver(pool)
+                        await saver.setup()
+                        logger.info(
+                            "LangGraph checkpoint tables initialized in Postgres "
+                            "(langgraph dev mode — checkpointer managed by server)."
+                        )
+                    finally:
+                        await pool.close()
+
+                try:
+                    asyncio.get_running_loop()
+                except RuntimeError:
+                    asyncio.run(_ensure_tables())
+                else:
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor() as executor:
+                        executor.submit(asyncio.run, _ensure_tables()).result()
+            except Exception as e:
+                logger.warning(
+                    "Failed to initialize Postgres checkpoint tables: %s. "
+                    "The LangGraph dev server will use its default backend.",
+                    e,
+                )
         return builder.compile()
     else:
         from ebdev.config import config
@@ -264,6 +396,8 @@ def build_graph() -> CompiledStateGraph:
                         conninfo=config.POSTGRES_URL,
                         min_size=1,
                         max_size=10,
+                        max_lifetime=1800,
+                        max_idle=600,
                         kwargs={"autocommit": True},
                         open=False,
                     )
@@ -271,7 +405,7 @@ def build_graph() -> CompiledStateGraph:
                     saver = AsyncPostgresSaver(pool)
                     await saver.setup()
                     logger.info("LangGraph graph compiled with AsyncPostgresSaver checkpointer.")
-                    return builder.compile(checkpointer=saver)
+                    return builder.compile(checkpointer=ResilientPostgresSaver(pool))
 
                 try:
                     loop = asyncio.get_running_loop()
