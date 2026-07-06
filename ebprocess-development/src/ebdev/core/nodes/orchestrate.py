@@ -25,6 +25,7 @@ from pydantic import ValidationError
 
 from ebdev.config import config
 from ebdev.core.constants import Agents
+from ebdev.core.name_utils import extract_feature_name
 from ebdev.core.nodes.common import send_progress
 from ebdev.core.spoq_map import build_epic_tasks, compute_epic_waves
 from ebdev.models.schemas import OrchestrationStrategy, SPOQMapEpic
@@ -91,90 +92,110 @@ async def orchestrate_node(state: GraphState) -> GraphState:
         for kw in ["api", "endpoint", "backend", "db", "database", "postgres", "sql", "migration"]
     )
     
-    # Simple default stages based on platform dependencies
-    # If "api" exists, it runs first in sequential/mock_first modes
+    # Simple default execution mode based on platform composition
     has_api = "api" in platforms
-    other_platforms = [p for p in platforms if p != "api"]
-    
-    if has_api and len(platforms) > 1 and not ui_ux_only_detected:
-        default_mode = "spoq"
-        # Future: integrate with Jira/API to pull the exact task list and hours
-        default_mocking = "mock_repositories" if not offline_first_detected else "live"
-    else:
-        default_mode = "parallel"
-        default_mocking = "live"
-        
+    default_mode = "spoq" if (has_api and len(platforms) > 1 and not ui_ux_only_detected) else "parallel"
+
+    # 2. Rule-Based Fallback (used only when LLM is unavailable or fails)
+    def _derive_mocking_level(tasks, platforms, offline_first: bool) -> str:
+        """Derive mocking level from task composition when LLM is unavailable."""
+        has_api_tasks = any("api" in t.active_platforms for t in tasks)
+        has_backend_keywords = any(
+            kw in (t.name or "").lower()
+            for t in tasks
+            for kw in ["api", "backend", "endpoint", "schema", "database",
+                       "migration", "resolver", "controller"]
+        )
+        has_ui_only = all(
+            "api" not in t.active_platforms and "web" not in t.active_platforms
+            for t in tasks
+        ) and any("flutter" in t.active_platforms for t in tasks)
+
+        if offline_first:
+            return "live"
+        if has_api_tasks or has_backend_keywords:
+            return "live"
+        if has_ui_only:
+            return "ui_stubs"
+        return "mock_repositories"
+
+    fallback_mocking = _derive_mocking_level(
+        ctx.ticket.tasks if ctx.ticket and ctx.ticket.tasks else [],
+        platforms,
+        offline_first_detected,
+    )
+
     fallback_strategy = OrchestrationStrategy(
         complexity="high" if (offline_first_detected or (len(platforms) > 1 and not ui_ux_only_detected)) else "low",
         offline_first=offline_first_detected,
         ui_ux_only=ui_ux_only_detected,
         execution_mode=default_mode,
-        mocking_level=default_mocking,
+        mocking_level=fallback_mocking,
         max_repair_iterations=3,
         reasoning="Rule-based fallback evaluation based on ticket requirements and platform scope."
     )
 
-    # 2. Try LLM Architect (OpenCode)
-    # 1. Determine Strategy (Bypass LLM if tasks are explicitly provided)
-    if ctx.ticket and ctx.ticket.tasks:
-        logger.info("Explicit tasks provided in payload. Bypassing LLM orchestration.")
-        strategy = OrchestrationStrategy(
-            complexity="high",
-            execution_mode="spoq",
-            offline_first=False,
-            ui_ux_only=False,
-            mocking_level="mock_repositories",
-            reasoning="Explicit task array provided by JIRA/estimation payload."
-        )
-    else:
-        strategy = OrchestrationStrategy(
-            complexity="low",
-            execution_mode="direct",
-            offline_first=False,
-            ui_ux_only=False,
-            mocking_level="mock_repositories",
-            reasoning="Fallback strategy."
-        )
-        if config.OPENCODE_API_KEY or config.OPENCODE_SERVER_URL:
+    # 3. Determine Strategy — LLM first, fall back to rule-based
+    strategy: OrchestrationStrategy | None = None
+    tasks_exist = bool(ctx.ticket and ctx.ticket.tasks)
+
+    if config.OPENCODE_API_KEY or config.OPENCODE_SERVER_URL:
+        try:
+            # Build enriched prompt that includes task-level details so the LLM
+            # can derive accurate mocking levels, feature names, and endpoints.
+            task_details: list[str] = []
+            if tasks_exist:
+                for t in ctx.ticket.tasks:
+                    task_details.append(
+                        f"  - Task {t.id}: \"{t.name}\" "
+                        f"(platforms: {', '.join(t.active_platforms)}, "
+                        f"estimated: {sum(h.estimatedHour for h in t.hours):.1f}h)"
+                    )
+
+            prompt = build_orchestrator_prompt(
+                platforms=platforms,
+                ticket_id=ticket_id,
+                ticket_title=ticket_title,
+                ticket_desc=ticket_desc,
+                ticket_ac=ticket_ac,
+                task_details=task_details if task_details else None,
+            )
+            server_url = config.OPENCODE_SERVER_URL or DEFAULT_OPENCODE_SERVER_URL
+            directory = ctx.repo_path or str(Path(config.WORKSPACE_DIR) / ctx.space_name)
+            client = OpenCodeAPIClient(base_url=server_url, api_key=config.OPENCODE_API_KEY, directory=directory)
+
+            session_id = await client.create_session(title=f"Orchestrator-{ticket_id}")
+            res = await client.send_prompt_message(
+                session_id=session_id,
+                agent=Agents.ORCHESTRATOR,
+                prompt=prompt,
+                model=config.OPENCODE_MODEL,
+            )
+
+            parts = res.get("parts", [])
+            reply_text = "".join(p.get("text", "") for p in parts if p.get("type") == "text")
+
+            data = None
             try:
-                prompt = build_orchestrator_prompt(
-                    platforms=platforms,
-                    ticket_id=ticket_id,
-                    ticket_title=ticket_title,
-                    ticket_desc=ticket_desc,
-                    ticket_ac=ticket_ac
-                )
-                server_url = config.OPENCODE_SERVER_URL or DEFAULT_OPENCODE_SERVER_URL
-                directory = ctx.repo_path or str(Path(config.WORKSPACE_DIR) / ctx.space_name)
-                client = OpenCodeAPIClient(base_url=server_url, api_key=config.OPENCODE_API_KEY, directory=directory)
-                
-                session_id = await client.create_session(title=f"Orchestrator-{ticket_id}")
-                res = await client.send_prompt_message(
-                    session_id=session_id,
-                    agent=Agents.ORCHESTRATOR,
-                    prompt=prompt,
-                    model=config.OPENCODE_MODEL
-                )
-                
-                # Parse response JSON
-                parts = res.get("parts", [])
-                reply_text = "".join(p.get("text", "") for p in parts if p.get("type") == "text")
+                parsed = json.loads(reply_text.strip())
+                if isinstance(parsed, dict):
+                    data = parsed
+            except json.JSONDecodeError:
+                json_match = re.search(r"```json\s*(\{.*?\})\s*```", reply_text, re.DOTALL)
+                if json_match:
+                    data = json.loads(json_match.group(1))
 
-                data = None
-                try:
-                    parsed = json.loads(reply_text.strip())
-                    if isinstance(parsed, dict):
-                        data = parsed
-                except json.JSONDecodeError:
-                    json_match = re.search(r"```json\s*(\{.*?\})\s*```", reply_text, re.DOTALL)
-                    if json_match:
-                        data = json.loads(json_match.group(1))
+            if data:
+                strategy = OrchestrationStrategy(**data)
+                logger.info("LLM architect strategy: %s (%s complexity, mocking=%s)",
+                             strategy.execution_mode, strategy.complexity, strategy.mocking_level)
+        except (httpx.HTTPError, json.JSONDecodeError, ValidationError, AttributeError, KeyError) as e:
+            logger.warning("LLM architect failed, using rule-based strategy: %s", e)
 
-                if data:
-                    strategy = OrchestrationStrategy(**data)
-                    logger.info("LLM architect strategy selected: %s (%s complexity)", strategy.execution_mode, strategy.complexity)
-            except (httpx.HTTPError, json.JSONDecodeError, ValidationError, AttributeError, KeyError) as e:
-                logger.warning("LLM architect failed, using rule-based fallback: %s", e)
+    if strategy is None:
+        strategy = fallback_strategy
+        logger.info("Using rule-based strategy (mocking=%s, mode=%s)",
+                     strategy.mocking_level, strategy.execution_mode)
 
     # Log the strategy decision
     logger.info("=== ORCHESTRATION STRATEGY SELECTED ===")
@@ -225,6 +246,101 @@ async def orchestrate_node(state: GraphState) -> GraphState:
 
         logger.info("SPOQ dispatched epic %s with %d tasks (map %s)", active_epic_id, len(active_epic_tasks), map_id)
 
+    def capitalize_first(s: str) -> str:
+        """Capitalise each dash/underscore/space-separated segment (e.g. 'enquiry-form' → 'EnquiryForm')."""
+        return "".join(p.capitalize() for p in re.split(r"[-_\s]", s) if p)
+
+    # Derive expected endpoints and schemas from task descriptions
+    def _derive_expected_endpoints(tasks) -> list[dict]:
+        """Extract expected API endpoints from task names."""
+        endpoints = []
+        entity_patterns: dict[str, list[str]] = {
+            "enquiry": ["POST /enquiry", "GET /enquiries"],
+            "user": ["POST /users", "GET /users", "PUT /users/{id}"],
+            "auth": ["POST /auth/login", "POST /auth/register", "POST /auth/refresh"],
+            "product": ["POST /products", "GET /products", "GET /products/{id}"],
+            "order": ["POST /orders", "GET /orders", "GET /orders/{id}"],
+            "profile": ["GET /profile", "PUT /profile"],
+            "payment": ["POST /payments", "GET /payments/{id}"],
+            "notification": ["GET /notifications", "PUT /notifications/{id}/read"],
+            "feedback": ["POST /feedback", "GET /feedback"],
+            "subscription": ["POST /subscriptions", "GET /subscriptions", "DELETE /subscriptions/{id}"],
+        }
+        for task in tasks:
+            name_lower = (task.name or "").lower()
+            nouns_found = [n for n in entity_patterns if n in name_lower]
+            if nouns_found:
+                for noun in nouns_found:
+                    has_create = "create" in name_lower
+                    endpoints.append({
+                        "entity": noun,
+                        "task_id": task.id,
+                        "suggested_routes": entity_patterns[noun],
+                        "graphql_mutation": f"create{capitalize_first(noun)}" if has_create else None,
+                    })
+            elif "create" in name_lower or "form" in name_lower:
+                entity = "entity"
+                for keyword in ("form", "page", "screen"):
+                    idx = name_lower.find(keyword)
+                    if idx > 0:
+                        entity = name_lower[:idx].strip().replace(" ", "-")
+                        break
+                endpoints.append({
+                    "entity": entity,
+                    "task_id": task.id,
+                    "suggested_routes": [f"POST /{entity}"],
+                    "graphql_mutation": f"create{capitalize_first(entity.replace('-', '_'))}",
+                })
+        return endpoints
+
+    derived_endpoints = _derive_expected_endpoints(ctx.ticket.tasks if ctx.ticket and ctx.ticket.tasks else [])
+
+    # Build per-task context with derived feature names and expected layers
+    task_contexts: dict[str, dict] = {}
+    if ctx.ticket and ctx.ticket.tasks:
+        for task in ctx.ticket.tasks:
+            feature = extract_feature_name(task.name or "")
+            platforms_in_task = task.active_platforms
+            task_contexts[str(task.id)] = {
+                "task_name": task.name,
+                "feature_name": feature,
+                "platforms": platforms_in_task,
+                "needs_schema": "api" in platforms_in_task,
+                "needs_ui": "flutter" in platforms_in_task,
+                "expected_files": {
+                    "api": [
+                        f"libs/data-access/src/{feature}/{feature}.schema.ts",
+                        f"libs/data-access/src/{feature}/{feature}.repository.ts",
+                        f"libs/data-access/src/{feature}/index.ts",
+                        f"apps/api/src/modules/{feature}/{feature}.service.ts",
+                        f"apps/api/src/modules/{feature}/{feature}.resolver.ts",
+                        f"apps/api/src/modules/{feature}/{feature}.module.ts",
+                        f"apps/api/src/modules/{feature}/dto/input/create-{feature}.input.ts",
+                        f"apps/api/src/i18n/en/{feature}.json",
+                        f"apps/api/src/i18n/ne/{feature}.json",
+                    ] if "api" in platforms_in_task else [],
+                    "flutter": [
+                        f"lib/features/{feature}/domain/repositories/{feature}_repository.dart",
+                        f"lib/features/{feature}/data/models/{feature}_model.dart",
+                        f"lib/features/{feature}/data/sources/{feature}_remote_source.dart",
+                        f"lib/features/{feature}/presentation/cubit/{feature}_cubit.dart",
+                        f"lib/features/{feature}/presentation/pages/{feature}_page.dart",
+                    ] if "flutter" in platforms_in_task else [],
+                },
+                "data_access_registrations": [
+                    f"libs/data-access/src/index.ts -> export * from './{feature}';",
+                    f"libs/data-access/src/data-access.models.ts -> name: {capitalize_first(feature)}.name, schema: {capitalize_first(feature)}Schema",
+                    f"libs/data-access/src/data-access.module.ts -> providers + exports",
+                ] if "api" in platforms_in_task else [],
+                "app_module_registrations": [
+                    f"apps/api/src/app.module.ts -> import {capitalize_first(feature)}Module + add to imports + GraphQL include",
+                ] if "api" in platforms_in_task else [],
+            }
+
+    primary_feature = ""
+    if ctx.ticket and ctx.ticket.tasks:
+        primary_feature = extract_feature_name(ctx.ticket.tasks[0].name or "")
+
     shared_ctx_data = {
         "ticket_id": ticket_id,
         "mocking_level": strategy.mocking_level,
@@ -232,8 +348,10 @@ async def orchestrate_node(state: GraphState) -> GraphState:
         "complexity": strategy.complexity,
         "api_schema": None,
         "graphql_schema": None,
-        "endpoints": [],
+        "endpoints": derived_endpoints,
         "active_epic_id": active_epic_id,
+        "task_contexts": task_contexts,
+        "primary_feature_name": primary_feature,
     }
 
     updated_ctx = ctx.model_copy(update={
@@ -241,7 +359,8 @@ async def orchestrate_node(state: GraphState) -> GraphState:
         "offline_first": strategy.offline_first,
         "spoq_epic_dir": active_epic_id,
         "map_id": map_id,
-        "shared_context": shared_ctx_data
+        "shared_context": shared_ctx_data,
+        "feature_name": primary_feature or ctx.feature_name,
     })
 
     return state.model_copy(update={

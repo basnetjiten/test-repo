@@ -273,7 +273,19 @@ def build_graph() -> CompiledStateGraph:
                     logger.info("LangGraph graph compiled with AsyncPostgresSaver checkpointer.")
                     return builder.compile(checkpointer=saver)
 
-                return asyncio.run(_setup())
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    # No running loop — safe to use asyncio.run() (e.g. test script, langgraph dev)
+                    compiled = asyncio.run(_setup())
+                else:
+                    # Running inside an event loop (e.g. uvicorn reload) — run setup in a
+                    # dedicated thread with its own event loop, since AsyncConnectionPool
+                    # TCP connections survive across threads/loops.
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor() as executor:
+                        compiled = executor.submit(asyncio.run, _setup()).result()
+                return compiled
             except Exception as e:
                 logger.warning("Postgres database is unreachable or failed to initialize: %s. Falling back to MemorySaver.", e)
                 return builder.compile(checkpointer=MemorySaver())

@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 
 from ebdev.config import config
 from ebdev.core.exceptions import GitServiceError
+from ebdev.core.name_utils import extract_feature_name, sanitize_branch_name
 from ebdev.core.nodes.common import send_progress
 from ebdev.platforms import get_platform_strategy
 from ebdev.services.git import GitConflictError, GitService, RemoteRepoService
@@ -115,7 +116,7 @@ async def prepare_node(state: GraphState) -> GraphState:
                 await asyncio.to_thread(git.clone_or_fetch, plat_repo_url, resolved_starter_kit)
 
             # Sanitized branch checkout
-            sanitized_feature = _sanitize_branch_name(ctx.feature_name or ctx.ticket.title)
+            sanitized_feature = sanitize_branch_name(ctx.feature_name or ctx.ticket.title)
             branch_name = f"feature/{ctx.ticket.id}-{sanitized_feature}"
 
             await asyncio.to_thread(git.checkout_branch, branch_name)
@@ -161,10 +162,10 @@ async def prepare_node(state: GraphState) -> GraphState:
         raise GitServiceError(err) from e
 
     # Update state context values
-    sanitized_feature_slug = _sanitize_feature_name(ctx.feature_name or ctx.ticket.title)
+    sanitized_feature_slug = extract_feature_name(ctx.feature_name or ctx.ticket.title)
     updated_ctx = ctx.model_copy(update={
         "repo_path": str(repo_path),
-        "generated_branch": f"feature/{ctx.ticket.id}-{_sanitize_branch_name(ctx.feature_name or ctx.ticket.title)}",
+        "generated_branch": f"feature/{ctx.ticket.id}-{sanitize_branch_name(ctx.feature_name or ctx.ticket.title)}",
         "feature_name": sanitized_feature_slug
     })
 
@@ -174,59 +175,6 @@ async def prepare_node(state: GraphState) -> GraphState:
         "last_node": "prepare",
         "context": updated_ctx
     })
-
-
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-def _sanitize_feature_name(name: str) -> str:
-    """
-    Sanitize the feature name to a kebab-case string (noun-only).
-
-    Strips common generic verbs (create, add, build, implement, etc.) and
-    generic nouns (feature, screen, page, ui, flow) so the result is the
-    core noun/entity that describes the feature.
-
-    Parameters
-    ----------
-    name : str
-        The raw feature name or ticket title.
-
-    Returns
-    -------
-    str
-        The sanitized kebab-case feature name (e.g. "enquiry", "user-profile").
-    """
-    clean = re.sub(
-        r"(?i)\b(create|add|build|implement|update|fix|remove|delete|edit|manage|show|view|list|get|api|bug|feature|screen|page|ui|flow)\b",
-        "",
-        name,
-    ).strip()
-    if not clean:
-        clean = name
-    clean = re.sub(r'(?<!^)(?=[A-Z])', '-', clean).lower()
-    clean = re.sub(r'[^a-z0-9-]', '-', clean)
-    clean = re.sub(r'-+', '-', clean).strip('-')
-    return clean
-
-
-def _sanitize_branch_name(name: str) -> str:
-    """
-    Sanitize the branch name for Git compatibility.
-
-    Parameters
-    ----------
-    name : str
-        The raw name to sanitize.
-
-    Returns
-    -------
-    str
-        The branch-safe sanitized string.
-    """
-    sanitized = re.sub(r"[^a-zA-Z0-9\-_]", "-", name)
-    sanitized = re.sub(r"-+", "-", sanitized)
-    return sanitized.strip("-")
 
 
 async def _refactor_flutter_project(plat_path: Path, new_package_name: str) -> None:

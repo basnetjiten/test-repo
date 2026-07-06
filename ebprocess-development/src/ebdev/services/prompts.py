@@ -329,6 +329,7 @@ def build_orchestrator_prompt(
     ticket_title: str,
     ticket_desc: str,
     ticket_ac: str,
+    task_details: list[str] | None = None,
 ) -> str:
     """
     Return the prompt for the Orchestrator LLM.
@@ -345,12 +346,22 @@ def build_orchestrator_prompt(
         The detailed description of the ticket.
     ticket_ac : str
         The acceptance criteria for the ticket.
+    task_details : list[str] | None
+        Pre-formatted task entries (e.g. "Task 41831: 'Create enquiry form' (platforms: flutter, api, 2h)").
 
     Returns
     -------
     str
         The formatted orchestrator prompt.
     """
+    task_section = ""
+    if task_details:
+        task_lines = "\n".join(task_details)
+        task_section = f"""
+Tasks Breakdown:
+{task_lines}
+"""
+
     return f"""You are the Head Technical Architect for an autonomous multi-platform project.
 Analyze this ticket and decide the best execution strategy for the platforms: {platforms}.
 
@@ -358,7 +369,7 @@ Ticket Details:
 - ID: {ticket_id}
 - Title: {ticket_title}
 - Description: {ticket_desc}
-- Acceptance Criteria: {ticket_ac}
+- Acceptance Criteria: {ticket_ac}{task_section}
 
 Determine:
 1. Complexity ("low", "medium", or "high").
@@ -368,7 +379,11 @@ Determine:
    - "spoq": Use Wave-Based Topological Dispatch (generate API contracts first, mock frontends in parallel, then integrate). Use this for any epic combining API and frontends.
    - "parallel": Run all platforms concurrently (for low complexity, UI-only, or independent changes).
    - "sequential": Run platforms strictly one after another.
-5. Mocking level for frontends: "live" (connect directly) or "mock_repositories" (mock network/client implementations based on OpenAPI specs).
+5. Mocking level for frontends:
+   - "live": Real backend required — at least one task targets the API platform and needs real schema/endpoints.
+   - "mock_repositories": No backend work needed — frontends can use mock data from API contracts.
+   - "ui_stubs": Pure UI presentation — no backend, no real data models needed.
+   IMPORTANT: If ANY task has 'api' in its platforms list, mocking_level MUST be "live".
 6. Reasoning: Explain the rationale.
 
  You MUST return your decision as this exact JSON object with no markdown fences:

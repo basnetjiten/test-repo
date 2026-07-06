@@ -80,9 +80,9 @@ workspace/                               ← runtime project checkouts
     │   │   ├── {task-name}.md           ← Task plan Markdown (e.g. api-impl-41831.md)
     │   │   ├── context_api.json         ← Platform context (generated)
     │   │   ├── context_flutter.json     ← Platform context (generated)
-    │   │   └── journals/                ← Agent session journals
-    │   │       ├── 2026-07-06_development_builder.md
-    │   │       └── JOURNAL.md           ← Consolidated
+    │   │   └── journals/                ← Confidence-scored session journals
+    │   │       ├── 2026-07-06_development_api-builder.md
+    │   │       └── JOURNAL.md           ← Consolidated epic journal
     │   └── Epic-{id}/                   ← Multiple epics can coexist
     │       └── ...
     │
@@ -137,7 +137,7 @@ The `orchestrate_node` parses ticket properties to choose an `OrchestrationStrat
 
 ## 4. Specialist Orchestrated Queuing (SPOQ)
 
-SPOQ is a methodology (arXiv:2606.03115v1) for multi-agent software engineering. It combines wave-based topological dispatch, dual validation gates, and human-as-agent integration. Our implementation adopts the four-stage pipeline, 10-code-metric validation gate, journal tracking with confidence scores, and epic lifecycle management.
+SPOQ is a methodology (arXiv:2606.03115v1) for multi-agent software engineering. It combines wave-based topological dispatch, dual validation gates, confidence-scored session journals, and epic lifecycle management.
 
 ### Four-Stage Pipeline
 
@@ -225,9 +225,32 @@ After each task is implemented, the `@code_evaluator` agent independently scores
 
 On failure: evaluator returns a **≤20 line remediation** with `file:line` references and numbered action items. The builder applies fixes and re-submits (max 3 iterations).
 
-### Journal Tracking with Confidence Scoring
+### Confidence Scoring & Session Journals
 
-Each agent session writes a journal entry with YAML frontmatter and structured Markdown body:
+Every agent work session produces a journal entry — a structured Markdown file with YAML frontmatter that captures what was done, why, how confident the agent is, and what remains. Journals accumulate per-epic and provide the audit trail for the validation gate, multi-agent coordination, and post-mortem analysis.
+
+#### Journal File Naming
+
+```
+.ebpearls/Epic-{id}/
+  journals/
+    {YYYY-MM-DD}_{session-type}_{agent-short}.md  ← Per-session entries
+    JOURNAL.md                                     ← Consolidated epic journal
+```
+
+Each session file follows the pattern `{date}_{type}_{role}.md`:
+- `date`: ISO 8601 date, e.g. `2026-07-06`
+- `type`: One of `development`, `refactor`, `bugfix`, `validation`, `review`
+- `role`: Short agent name, e.g. `builder`, `planner`, `evaluator`
+
+Examples:
+```
+2026-07-06_development_api-builder.md
+2026-07-06_validation_evaluator.md
+2026-07-07_bugfix_api-fixer.md
+```
+
+#### YAML Frontmatter
 
 ```yaml
 ---
@@ -238,12 +261,107 @@ confidence: 0.88
 session_type: development
 files_modified:
   - libs/data-access/src/enquiry/enquiry.schema.ts
+  - libs/data-access/src/enquiry/enquiry.repository.ts
+  - apps/api/src/modules/enquiry/enquiry.module.ts
 tasks_completed: 1
 tasks_total: 3
 ---
 ```
 
-Confidence calibration: ≥0.95 production-ready, 0.85–0.94 well tested, 0.75–0.84 functional, 0.65–0.74 needs validation, <0.65 experimental.
+| Field | Type | Description |
+|:---|:---|:---|
+| `agent` | `str` | Agent name and model tier, e.g. `"Claude Code (Opus 4.5)"` |
+| `start_time` | `ISO 8601` | Session start timestamp in UTC |
+| `end_time` | `ISO 8601` | Session end timestamp in UTC |
+| `confidence` | `float (0.0–1.0)` | Calibrated self-assessment score |
+| `session_type` | `str` | `development` / `refactor` / `bugfix` / `validation` / `review` |
+| `files_modified` | `list[str]` | Every file touched during the session |
+| `tasks_completed` | `int` | Number of tasks finished this session |
+| `tasks_total` | `int` | Total tasks assigned in the current wave |
+
+#### Confidence Score Calibration
+
+Agents self-assess their output using a calibrated 0.0–1.0 scale before handing off to the `@code_evaluator`. The score is a subjective quality assessment, not an automated metric — it captures edge-case awareness, testing thoroughness, and known gaps the agent is aware of.
+
+| Range | Label | When to Use |
+|-------|-------|-------------|
+| **0.95–1.0** | Production-ready | All acceptance criteria met, build/lint passes, edge cases handled, tests written and passing. Ready for merge without human review. |
+| **0.85–0.94** | Well tested | Core functionality works with tests. Minor edge cases may be untested. Small refactors may be needed but no blocking issues. |
+| **0.75–0.84** | Functional | Happy path works. Some edge cases untested, minor TODOs remain, or a few non-critical acceptance criteria are unmet. Needs additional validation. |
+| **0.65–0.74** | Needs validation | Works in ideal conditions only. Known gaps in error handling, testing, or completeness. Flag for targeted review. |
+| **< 0.65** | Experimental | Incomplete, known defects, or untested assumptions. Flag as requiring human review before proceeding to next wave. |
+
+The evaluator cross-references the agent's confidence score against its own 10-metric scoring. A significant gap (e.g. agent claims 0.90 but evaluator scores below 80) triggers deeper review.
+
+#### Journal Body (Markdown)
+
+After the frontmatter, every journal entry follows a standardized Markdown body:
+
+```markdown
+## Summary
+Brief 1–2 sentence overview of what was accomplished this session.
+
+## Work Completed
+- Task contract-41831: Defined Enquiry Mongoose schema with timestamps and soft-delete fields
+- Task contract-41831: Created EnquiryRepository extending BaseRepo<EnquiryDocument>
+
+## Changes Made
+**Data Access Layer**
+- `libs/data-access/src/enquiry/enquiry.schema.ts` — Created schema with title (required), description (required), isDeleted, deletedAt
+- `libs/data-access/src/enquiry/enquiry.repository.ts` — Created repository extending BaseRepo with createEnquiry method
+
+**Module Layer**
+- `apps/api/src/modules/enquiry/enquiry.module.ts` — Wired MongooseModule.forFeature, providers, exports
+
+**Registrations**
+- `libs/data-access/src/index.ts` — Added `export * from './enquiry'`
+- `libs/data-access/src/data-access.models.ts` — Registered { name: Enquiry.name, schema: EnquirySchema }
+- `apps/api/src/app.module.ts` — Added EnquiryModule to imports and GraphQL include
+
+## Issues Encountered
+- None
+
+## Testing
+- Build check: `npm run build:api` — PASSED (0 errors)
+- Lint check: `npm run lint` — PASSED (0 warnings)
+- Manual schema verification: confirmed enquiry collection created in MongoDB with correct fields
+
+## Next Steps
+1. Builder must create CreateEnquiryInput DTO, EnquiryService, and EnquiryResolver
+2. Builder must add i18n keys in en/enquiry.json and ne/enquiry.json
+3. Flutter builder waits for API contract to be available before generating data layer
+```
+
+#### How Journals Drive the Pipeline
+
+1. **Agent writes journal** → stored in `journals/{date}_{type}_{role}.md`
+2. **Evaluator reads journal** → cross-references confidence score against 10-metric results
+3. **Orchestrator consolidates** → merges per-session journals into `JOURNAL.md` at epic completion
+4. **Audit trail** → every decision, file change, and issue is traceable across sessions
+
+#### Consolidation
+
+When all waves complete, the orchestrator produces `JOURNAL.md` — a chronological merge of all session journals with added sections:
+
+```markdown
+# Epic Journal: Epic-44445
+
+## Session Index
+| # | Date | Agent | Type | Confidence | Tasks |
+|---|------|-------|------|------------|-------|
+| 1 | 2026-07-06 | api_planner | plan | 0.92 | 1/1 |
+| 2 | 2026-07-06 | api_builder | development | 0.88 | 1/3 |
+| 3 | ... | ... | ... | ... | ... |
+
+## Metrics Summary
+- Average confidence across sessions: 0.87
+- Evaluator pass rate: 100% (4/4 tasks passed 10-metric gate)
+
+## Final Status
+- Epic status: done
+- Branch: feature/Epic-44445-enquiry → main (squash-merged)
+- PR: https://bitbucket.org/.../pull-requests/42
+```
 
 ### Epic Lifecycle
 
@@ -522,6 +640,7 @@ sequenceDiagram
         ├── core/
         │   ├── exceptions.py         ← Domain exceptions
         │   ├── graph.py              ← LangGraph StateGraph pipeline & routing
+        │   ├── name_utils.py         ← Shared feature name extraction & sanitization
         │   ├── spoq_map.py           ← Task DAG and SPOQ waves builder
         │   ├── spoq_utils.py         ← Task loading & epic lifecycle helper
         │   ├── nodes/
