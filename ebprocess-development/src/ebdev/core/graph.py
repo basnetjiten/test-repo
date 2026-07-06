@@ -28,7 +28,6 @@ from ebdev.core.nodes import (
     repair_node,
     validate_node,
 )
-from ebdev.core.spoq_utils import get_spoq_tasks
 from ebdev.models.schemas import GraphState
 
 if TYPE_CHECKING:
@@ -106,43 +105,23 @@ def _route_after_validate(state: GraphState) -> str:
     ValueError
         If the SPOQ epic task directory is missing when execution mode is SPOQ.
     """
-    is_spoq = state.is_spoq
-    
-    if is_spoq:
-        has_failures = state.failed or any(state.failed_platforms.values())
-        if has_failures:
-            return "repair"
-            
-        if state.context.spoq_epic_dir is None:
-            raise ValueError("spoq_epic_dir cannot be None when execution_mode is 'spoq'")
-            
-        # Check if there are any pending tasks left
-        all_tasks = get_spoq_tasks(state.context.spoq_epic_dir)
-        logger.info("[SPOQ Routing] Loaded %d tasks from %s", len(all_tasks), state.context.spoq_epic_dir)
-        for t in all_tasks:
-            logger.info("  Task %s: status=%s", t.get("id"), t.get("status"))
-        remaining = [t for t in all_tasks if t["status"] in ["pending", "blocked"]]
-        logger.info("[SPOQ Routing] Remaining tasks: %s", [t.get("id") for t in remaining])
-        
-        if remaining:
-            logger.info("[SPOQ Routing] Advancing to next planning phase.")
-            return "plan"
-            
-        logger.info("[SPOQ Routing] All tasks completed. Proceeding to publish.")
-        return "publish"
-        
-    else:
-        # Backward compatibility for parallel/sequential without spoq
-        active_platforms = state.context.platforms
-        has_failures = any(state.failed_platforms.get(p) for p in active_platforms)
-        
-        if has_failures:
-            return "repair"
-            
-        if state.done:
-            return "contract"
-            
-        return "plan"
+    if state.failed or any(state.failed_platforms.values()):
+        return "repair"
+
+    if state.is_spoq:
+        return "publish" if state.done else "plan"
+
+    # Backward compatibility for parallel/sequential without SPOQ
+    active_platforms = state.context.platforms
+    has_failures = any(state.failed_platforms.get(p) for p in active_platforms)
+
+    if has_failures:
+        return "repair"
+
+    if state.done:
+        return "contract"
+
+    return "plan"
 
 
 def _route_after_contract(state: GraphState) -> str:

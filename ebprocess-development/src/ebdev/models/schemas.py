@@ -27,8 +27,38 @@ _DEFAULT_PLATFORM: str = "flutter"
 # ---------------------------------------------------------------------------
 # Ticket Schema
 # ---------------------------------------------------------------------------
+class EpicTaskPlatform(BaseModel):
+    id: int
+    name: str
+
+class EpicTaskHour(BaseModel):
+    estimatedHour: float
+    taskId: int
+    platformId: int
+    platform: EpicTaskPlatform
+
+class EpicTask(BaseModel):
+    id: int
+    name: str
+    status: str
+    hours: List[EpicTaskHour] = Field(default_factory=list)
+
+    @property
+    def active_platforms(self) -> List[str]:
+        """Return lowercase platform names that have > 0 estimated hours."""
+        active = []
+        for h in self.hours:
+            if h.estimatedHour > 0:
+                plat_name = h.platform.name.lower()
+                # Map standard names to internal keys if necessary
+                if plat_name == "web app":
+                    active.append("web")
+                else:
+                    active.append(plat_name)
+        return list(dict.fromkeys(active))
+
 class SprintTicket(BaseModel):
-    """Represents a single sprint ticket or issue from a project management system."""
+    """Represents a single sprint ticket or epic from a project management system."""
 
     id: str
     title: str
@@ -36,6 +66,7 @@ class SprintTicket(BaseModel):
     status: str
     acceptance_criteria: List[str] = Field(default_factory=list)
     figma_url: Optional[str] = None
+    tasks: List[EpicTask] = Field(default_factory=list)
 
     @property
     def summary(self) -> str:
@@ -54,7 +85,7 @@ class JobContext(BaseModel):
     workspace and storage path resolution (see ``project_storage_dir``).
     """
 
-    job_id: str
+    task_id: str
     space_name: str
     ticket_id: str
     ticket: SprintTicket
@@ -64,11 +95,15 @@ class JobContext(BaseModel):
     platform: str = _DEFAULT_PLATFORM
     platforms: List[str] = Field(default_factory=list)
     current_agent: str = "plan"
-
+    starter_types: Dict[str, str] = Field(default_factory=dict)
+    
+    # State tracking
+    spoq_epic_dir: Optional[str] = None
+    active_task_id: Optional[str] = None
+    starter_kit_url: Optional[str] = None
     # Repository management
     branch: str = "main"
     project_repo: Optional[str] = None
-    starter_kit_url: Optional[str] = None
     # Per-platform starter kit source repositories.
     # TODO @Jiten Basnet: In the future, pull these from remote Bitbucket repositories:
     # starter_kit_urls: Dict[str, str] = Field(
@@ -100,6 +135,9 @@ class JobContext(BaseModel):
 
     # SPOQ execution state
     spoq_epic_dir: Optional[str] = None
+    map_id: Optional[str] = None
+    spoq_map_dir: Optional[str] = None
+    map_epics: List[SPOQMapEpic] = Field(default_factory=list, exclude=True)
 
     # Progress tracking (excluded from serialization)
     repair_iteration: int = Field(0, exclude=True)
@@ -116,13 +154,16 @@ class JobContext(BaseModel):
         Normalise input data before field assignment.
 
         Responsibilities:
-        - Mirror ``job_id`` ↔ ``ticket_id`` when only one is supplied.
         - Synchronise the ``platform`` string with the ``platforms`` list.
         - Derive ``feature_name`` from the ticket title when absent.
         """
-        _sync_job_ids(data)
+        if "task_id" not in data and data.get("job_id"):
+            data["task_id"] = data["job_id"]
         _sync_platforms(data)
         _resolve_feature_name(data)
+        if not data.get("map_id") and data.get("ticket_id"):
+            ticket_id = str(data["ticket_id"])
+            data["map_id"] = ticket_id if ticket_id.startswith("Map-") else f"Map-{ticket_id}"
         return data
 
     @model_validator(mode="after")
@@ -201,12 +242,7 @@ class JobContext(BaseModel):
 # ---------------------------------------------------------------------------
 # Private normalisation helpers (used only by model validators)
 # ---------------------------------------------------------------------------
-def _sync_job_ids(data: dict) -> None:
-    """Mirror ``job_id`` ↔ ``ticket_id`` when only one side is provided."""
-    if "job_id" not in data and "ticket_id" in data:
-        data["job_id"] = data["ticket_id"]
-    elif "ticket_id" not in data and "job_id" in data:
-        data["ticket_id"] = data["job_id"]
+
 
 
 def _sync_platforms(data: dict) -> None:
@@ -253,8 +289,7 @@ def _resolve_feature_name(data: dict) -> None:
 class JobResult(BaseModel):
     """Represents the output result of a completed pipeline job."""
 
-    job_id: str
-    space_name: str
+    task_id: str
     ticket_id: str
     status: str  # "success" | "failed" | "partial"
     summary: Optional[str] = None
@@ -267,12 +302,8 @@ class JobResult(BaseModel):
     def _normalize_fields(cls, data: dict) -> dict:
         """Coerce lists of dicts/non-strings in warnings or errors into standard string list representation."""
         if isinstance(data, dict):
-            # Sync key-variations for ticket_id / job_id
-            if "job_id" not in data and "ticket_id" in data:
-                data["job_id"] = data["ticket_id"]
-            elif "ticket_id" not in data and "job_id" in data:
-                data["ticket_id"] = data["job_id"]
-
+            if "task_id" not in data and data.get("job_id"):
+                data["task_id"] = data["job_id"]
             for list_field in ("errors", "warnings"):
                 if list_field in data and isinstance(data[list_field], list):
                     coerced = []
@@ -335,6 +366,67 @@ class SPOQTask(BaseModel):
     files_to_touch: List[str] = Field(default_factory=list)
     outputs: List[str] = Field(default_factory=list)
     acceptance_criteria: List[str] = Field(default_factory=list)
+
+
+class SPOQMapEpic(BaseModel):
+    """Program-level epic entry used by SPOQ maps."""
+
+    id: str
+    title: str
+    description: str = ""
+    status: str = "planned"
+    sprint: str = "sprint-1"
+    depends_on: List[str] = Field(default_factory=list)
+    platforms: List[str] = Field(default_factory=list)
+    tasks: List[EpicTask] = Field(default_factory=list)
+    acceptance_criteria: List[str] = Field(default_factory=list)
+    path: Optional[str] = None
+    estimated_hours: float = 0.0
+
+    @model_validator(mode="after")
+    def _normalize(self) -> "SPOQMapEpic":
+        """Derive stable defaults from the task payload when omitted."""
+        if not self.platforms:
+            platforms: list[str] = []
+            for task in self.tasks:
+                platforms.extend(task.active_platforms)
+            self.platforms = list(dict.fromkeys(platforms))
+
+        if not self.estimated_hours and self.tasks:
+            total_hours = 0.0
+            for task in self.tasks:
+                total_hours += sum(hour.estimatedHour for hour in task.hours)
+            self.estimated_hours = round(total_hours, 1)
+
+        return self
+
+
+class SPOQMap(BaseModel):
+    """Program-level SPOQ map that coordinates multiple epics."""
+
+    id: str
+    title: str
+    vision: str
+    status: str = "planned"
+    epics: List[SPOQMapEpic] = Field(default_factory=list)
+    epic_dependencies: Dict[str, List[str]] = Field(default_factory=dict)
+    dispatch_strategy: str = "wave-based"
+    success_criteria: List[str] = Field(default_factory=list)
+    estimated_effort: Dict[str, float] = Field(default_factory=dict)
+    risk_assessment: List[str] = Field(default_factory=list)
+    wave_assignments: List[List[str]] = Field(default_factory=list)
+    map_dir: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _normalize(self) -> "SPOQMap":
+        """Keep epic dependency data aligned with epic metadata."""
+        if not self.epic_dependencies and self.epics:
+            self.epic_dependencies = {epic.id: list(epic.depends_on) for epic in self.epics}
+
+        if not self.estimated_effort and self.epics:
+            self.estimated_effort = {epic.id: epic.estimated_hours for epic in self.epics}
+
+        return self
 
 
 # ---------------------------------------------------------------------------

@@ -195,7 +195,7 @@ class GitService:
 
                 try:
                     logger.info("Cloning starter kit from %s...", starter_kit_url)
-                    subprocess.run(["git", "clone", starter_clone_url, str(self.repo_path)], check=True, env=self.env)
+                    subprocess.run(["git", "clone", starter_clone_url, str(self.repo_path)], check=True, env=self.env, capture_output=True, text=True)
                 except subprocess.CalledProcessError as e:
                     raise GitServiceError(f"Failed to clone starter kit: {e.stderr}") from e
 

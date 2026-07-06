@@ -68,8 +68,9 @@ async def generate_node(state: GraphState) -> GraphState:
     if is_spoq:
         if ctx.spoq_epic_dir is None:
             raise ValueError("spoq_epic_dir cannot be None when execution_mode is 'spoq'")
+        spoq_epic_dir = ctx.spoq_epic_dir
         from ebdev.core.spoq_utils import get_active_wave_tasks
-        tasks = get_active_wave_tasks(ctx.spoq_epic_dir)
+        tasks = get_active_wave_tasks(spoq_epic_dir)
         platforms = []
         for t in tasks:
             platforms.extend(t.get("skills_required", []))
@@ -94,7 +95,7 @@ async def generate_node(state: GraphState) -> GraphState:
         if state.done_platforms.get(platform) is True:
             logger.info("[%s] Skipping because platform already successfully validated.", platform)
             existing_result = state.platform_results.get(platform) or JobResult(
-                job_id=ctx.ticket_id,
+                task_id=ctx.ticket_id,
                 space_name=ctx.space_name,
                 ticket_id=ctx.ticket_id,
                 status="success",
@@ -103,17 +104,38 @@ async def generate_node(state: GraphState) -> GraphState:
             return platform, existing_result, session_ids.get(platform)
         
         plat_path = ctx.platform_path(platform)
-        # Project-scoped plan file: .opencode/<space_name>/<platform>_plan.md
-        prefix = f"{ctx.job_id}_" if ctx.job_id else ""
-        plan_file = ctx.project_storage_dir(config.OPENCODE_PROJECT_DIR) / f"{prefix}{platform}_plan.md"
+        active_task_id = "default"
+        
+        if is_spoq:
+            # Find the active task in the wave that requires this platform
+            matching_tasks = [t for t in tasks if platform in t.get("skills_required", [])]
+            if matching_tasks:
+                active_task_id = matching_tasks[0]["id"]
+            plan_file = Path(spoq_epic_dir) / f"{active_task_id}.yml"
+        else:
+            task_id_str = str(ctx.task_id) if getattr(ctx, "task_id", None) else "default"
+            if "-" in task_id_str:
+                parts = task_id_str.rsplit("-", 1)
+                if len(parts) == 2 and parts[1].isdigit():
+                    phase_prefix = parts[0]
+                    jira_id = parts[1]
+                    task_id_dir = jira_id
+                    file_prefix = f"{phase_prefix}_"
+                else:
+                    task_id_dir = task_id_str
+                    file_prefix = ""
+            else:
+                task_id_dir = task_id_str
+                file_prefix = ""
+            plan_file = ctx.project_storage_dir(config.OPENCODE_PROJECT_DIR) / "plans" / task_id_dir / f"{file_prefix}plan_{platform}.md"
 
         if not plan_file.exists():
             err_result = JobResult(
-                job_id=ctx.ticket_id,
+                task_id=ctx.ticket_id,
                 space_name=ctx.space_name,
                 ticket_id=ctx.ticket_id,
                 status="failed",
-                errors=[f"Plan file {plan_file.name} missing. Planner must succeed first."]
+                errors=[f"Plan source {plan_file.name} missing. Planner must succeed first."]
             )
             return platform, err_result, None
 
@@ -129,6 +151,7 @@ async def generate_node(state: GraphState) -> GraphState:
         plat_ctx = ctx.model_copy(update={
             "repo_path": str(plat_path),
             "platform": platform,
+            "active_task_id": active_task_id if is_spoq else None,
             "current_agent": target_agent
         })
 
@@ -193,14 +216,16 @@ async def generate_node(state: GraphState) -> GraphState:
         combined_errors = []
         combined_warnings = []
         
+        failed_platforms = {**state.failed_platforms}
         for p, res in results.items():
             if res.status == "failed":
                 overall_status = "failed"
+                failed_platforms[p] = True
                 combined_errors.extend(res.errors or [])
             combined_warnings.extend(res.warnings or [])
 
         consolidated_result = JobResult(
-            job_id=ctx.ticket_id,
+            task_id=ctx.ticket_id,
             space_name=ctx.space_name,
             ticket_id=ctx.ticket_id,
             status=overall_status,
@@ -214,7 +239,8 @@ async def generate_node(state: GraphState) -> GraphState:
             "last_node": "generate",
             "result": consolidated_result,
             "platform_results": {**state.platform_results, **results},
-            "opencode_session_ids": session_ids
+            "opencode_session_ids": session_ids,
+            "failed_platforms": failed_platforms
         })
 
     except Exception as e:

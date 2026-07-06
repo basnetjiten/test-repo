@@ -1,0 +1,47 @@
+id: api-impl-41831
+title: Enquiry API Implementation
+epic: Epic-44445
+status: pending
+priority: high
+phase: 1
+estimate:
+  optimistic: 1h
+  realistic: 2h
+  pessimistic: 4h
+dependencies:
+  - contract-41831
+skills_required:
+  - nestjs-service
+  - nestjs-graphql
+  - api-localization
+files_to_touch:
+  - apps/api/src/modules/enquiry/enquiry.service.ts
+  - apps/api/src/modules/enquiry/enquiry.resolver.ts
+  - apps/api/src/modules/enquiry/enquiry.module.ts
+outputs:
+  - "EnquiryService with create() and findAll() methods"
+  - "EnquiryResolver with createEnquiry mutation and enquiries query"
+  - "EnquiryModule wired into AppModule"
+acceptance_criteria:
+  - "[ ] TypeScript compiles without errors"
+  - "[ ] Service implements create() with @Transactional()"
+  - "[ ] Resolver has @Mutation(createEnquiry) and @Query(enquiries)"
+  - "[ ] Module registered in AppModule imports"
+  - "[ ] All acceptance criteria from contract-41831 still pass"
+description: |
+  ## Objective
+  Implement the service, resolver, and module wiring for the Enquiry feature.
+
+  ## Steps
+  1. Create `enquiry.service.ts` with create() and findAll()
+     - Use @Transactional() for error handling
+     - Log creation events
+  2. Create `enquiry.resolver.ts`
+     - @Mutation(() => EnquiryResponse) createEnquiry
+     - @Query(() => [EnquiryResponse]) enquiries
+  3. Create `enquiry.module.ts` and register in AppModule
+
+  ## Verification
+  ```bash
+  npm run build:api
+  ```

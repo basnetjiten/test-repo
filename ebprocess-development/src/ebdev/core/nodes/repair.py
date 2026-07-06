@@ -66,7 +66,8 @@ async def repair_node(state: GraphState) -> GraphState:
     if is_spoq:
         if ctx.spoq_epic_dir is None:
             raise ValueError("spoq_epic_dir cannot be None when execution_mode is 'spoq'")
-        tasks = get_active_wave_tasks(ctx.spoq_epic_dir)
+        spoq_epic_dir = ctx.spoq_epic_dir
+        tasks = get_active_wave_tasks(spoq_epic_dir)
         active_platforms = []
         for t in tasks:
             active_platforms.extend(t.get("skills_required", []))
@@ -100,7 +101,7 @@ async def repair_node(state: GraphState) -> GraphState:
         # Reached limit - abort job
         if iteration >= config.MAX_REPAIR_ITERATIONS:
             failed_result = JobResult(
-                job_id=ctx.ticket_id,
+                task_id=ctx.ticket_id,
                 space_name=ctx.space_name,
                 ticket_id=ctx.ticket_id,
                 status="failed",
@@ -124,12 +125,18 @@ async def repair_node(state: GraphState) -> GraphState:
         # Update retry iteration and errors list, route back to generate
         await send_progress(state, f"Initiating repair retry iteration {iteration} for platforms: {failed_plats}...")
 
+        updated_failed_platforms = {**state.failed_platforms}
+        for p in failed_plats:
+            updated_failed_platforms[p] = False
+
         return state.model_copy(update={
             "last_node": "repair",
             "context": ctx.model_copy(update={
                 "repair_iteration": iteration,
                 "validation_errors": new_errors,
             }),
+            "result": None,  # Clear the failed result to allow generate/builder to run again
+            "failed_platforms": updated_failed_platforms,
             "done": False,
         })
 

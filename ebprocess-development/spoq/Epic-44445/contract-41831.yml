@@ -1,0 +1,47 @@
+id: contract-41831
+title: Enquiry API Contract
+epic: Epic-44445
+status: pending
+priority: high
+phase: 0
+estimate:
+  optimistic: 30m
+  realistic: 1h
+  pessimistic: 2h
+dependencies: []
+skills_required:
+  - api-schema
+  - nestjs-graphql
+files_to_touch:
+  - libs/data-access/src/enquiry/enquiry.schema.ts
+  - libs/data-access/src/enquiry/enquiry.repository.ts
+  - apps/api/src/modules/enquiry/dto/create-enquiry.input.ts
+  - apps/api/src/modules/enquiry/dto/enquiry.response.ts
+outputs:
+  - "Enquiry Mongoose schema with name, email, phone, message"
+  - "Enquiry repository extending BaseRepo"
+  - "CreateEnquiryInput DTO with validation"
+  - "EnquiryResponse ObjectType"
+acceptance_criteria:
+  - "[ ] TypeScript compiles without errors"
+  - "[ ] Schema has all required fields with proper decorators"
+  - "[ ] Repository implements create() and findAll()"
+  - "[ ] DTOs registered and exported"
+description: |
+  ## Objective
+  Create the API contract layer: schema, repository, and GraphQL DTOs for the Enquiry feature.
+
+  ## Steps
+  1. Create schema at `libs/data-access/src/enquiry/enquiry.schema.ts`
+     - Fields: name (string, required), email (string, required), phone (string, optional), message (string, required)
+     - Use @Schema({ timestamps: true })
+  2. Create repository at `libs/data-access/src/enquiry/enquiry.repository.ts`
+     - Extend BaseRepo<EnquiryDocument>
+  3. Create CreateEnquiryInput DTO with class-validator decorators
+  4. Create EnquiryResponse ObjectType
+  5. Register in mongoose-models.ts and providers.ts
+
+  ## Verification
+  ```bash
+  npm run build:api
+  ```

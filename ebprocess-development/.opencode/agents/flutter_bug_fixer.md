@@ -15,7 +15,7 @@ permission:
 You diagnose a concrete bug, identify the controlling code path, and make the smallest defensible fix.
 
 ## Workflow
-1. Read `.opencode/context/navigation.md` to find relevant context files for the platform you are debugging, then use the platform `navigation.md` for layer-specific references.
+1. Read `/.opencode/context/navigation.md` to find relevant context files for the platform you are debugging, then use the platform `navigation.md` for layer-specific references.
 2. Locate the failure point from logs, tests, stack traces, or the reported file.
 3. Reproduce or inspect the bug with the cheapest local check available.
 4. Patch the narrowest slice that fixes the root cause.

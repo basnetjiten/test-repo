@@ -59,7 +59,7 @@ async def finalize_node(state: GraphState) -> GraphState:
     summary = state.result.summary if state.result else "Job completed."
 
     result = JobResult(
-        job_id=ctx.ticket_id,
+        task_id=ctx.ticket_id,
         space_name=ctx.space_name,
         ticket_id=ctx.ticket.id if ctx.ticket else ctx.ticket_id,
         status=status,

@@ -12,6 +12,8 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import yaml
+
 # Ensure src directory is in python path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -57,6 +59,17 @@ async def run_test():
             "Flutter frontend includes form with title and description fields",
             "API backend exposes a POST /enquiry endpoint to accept and save enquiries"
         ],
+        tasks=[
+            {
+                "id": 60101,
+                "name": "Build enquiry form",
+                "status": "todo",
+                "hours": [
+                    {"estimatedHour": 1.0, "taskId": 60101, "platformId": 1, "platform": {"id": 1, "name": "flutter"}},
+                    {"estimatedHour": 1.0, "taskId": 60101, "platformId": 3, "platform": {"id": 3, "name": "api"}},
+                ],
+            }
+        ],
         figma_url=None
     )
 
@@ -90,19 +103,44 @@ async def run_test():
             progress_callback(f"Running mock actions for {platform}")
             
         if "plan" in agent:
-            # Create platform-specific mock plan file in the project storage directory
-            storage = ctx.project_storage_dir(config.OPENCODE_PROJECT_DIR)
-            plan_file = storage / f"{platform}_plan.md"
-            plan_content = (
-                f"# Implementation Plan - {platform.upper()}\n\n"
-                "## Scope\n"
-                f"Implement session and auth tokens on {platform.upper()}.\n"
-            )
-            plan_file.write_text(plan_content, encoding="utf-8")
+            if ctx.spoq_epic_dir and ctx.active_task_id:
+                yaml_path = Path(ctx.spoq_epic_dir) / f"{ctx.active_task_id}.yml"
+                yaml_path.write_text(
+                    yaml.safe_dump(
+                        {
+                            "id": ctx.active_task_id,
+                            "title": f"Plan for {platform}",
+                            "epic": ctx.ticket_id,
+                            "description": (
+                                f"## Objective\nCreate a concrete implementation plan for {platform}.\n\n"
+                                "## Steps\n1. Audit the codebase.\n2. Implement the required changes.\n3. Validate the result.\n"
+                            ),
+                            "status": "pending",
+                            "phase": 0,
+                            "dependencies": [],
+                            "skills_required": [platform],
+                            "files_to_touch": [f"src/{platform}/placeholder.txt"],
+                            "outputs": [f"{platform} output"],
+                            "acceptance_criteria": ["Plan is detailed enough for execution."],
+                        },
+                        sort_keys=False,
+                    ),
+                    encoding="utf-8",
+                )
+            else:
+                # Create platform-specific mock plan file in the project storage directory
+                storage = ctx.project_storage_dir(config.OPENCODE_PROJECT_DIR)
+                plan_file = storage / f"{platform}_plan.md"
+                plan_content = (
+                    f"# Implementation Plan - {platform.upper()}\n\n"
+                    "## Scope\n"
+                    f"Implement session and auth tokens on {platform.upper()}.\n"
+                )
+                plan_file.write_text(plan_content, encoding="utf-8")
 
-            # Write platform-prefixed context.json using the real write_context method
-            from ebdev.services.opencode import OpenCodeService
-            OpenCodeService.write_context(ctx, storage, platform=platform)
+                # Write platform-prefixed context.json using the real write_context method
+                from ebdev.services.opencode import OpenCodeService
+                OpenCodeService.write_context(ctx, storage, platform=platform)
             
             return JobResult(
                 job_id=ctx.ticket_id,
@@ -196,16 +234,23 @@ async def run_test():
 
         print("Invoking LangGraph concurrent pipeline...")
         final_state = await graph.ainvoke(initial_state)
+        final_ctx = final_state.get("context") if isinstance(final_state, dict) else getattr(final_state, "context", None)
 
         print("\n=== VERIFYING DIRECTORY STRUCTURE ===")
 
+        assert final_ctx is not None, "Expected the pipeline to return a final context."
+        assert final_ctx.spoq_map_dir is not None, "Expected SPOQ map directory to be populated."
+        assert final_ctx.spoq_epic_dir is not None, "Expected active SPOQ epic directory to be populated."
+
+        spoq_map_dir = Path(final_ctx.spoq_map_dir)
+        spoq_epic_dir = Path(final_ctx.spoq_epic_dir)
+
         # Assertions for central .opencode/ folder contents
         for platform in ["api", "flutter"]:
-            # 1. Check context file exists in .opencode/<space_name>/tasks/<platform>_context.json
-            project_opencode_dir = opencode_dir / context.space_name
-            context_file = project_opencode_dir / "tasks" / f"{platform}_context.json"
+            # 1. Check context file exists in the active epic directory.
+            context_file = spoq_epic_dir / f"context_{platform}.json"
             assert context_file.exists(), f"Expected context file {context_file} to exist."
-            print(f"[PASSED] Verified .opencode/{context.space_name}/tasks/{platform}_context.json exists.")
+            print(f"[PASSED] Verified SPOQ epic context file {context_file} exists.")
 
             # 2. Check workspace directories are populated and contain NO .opencode metadata folder
             plat_workspace = workspace_dir / platform
@@ -216,17 +261,22 @@ async def run_test():
             assert not opencode_in_workspace.exists(), f"Error: .opencode directory should NOT exist inside workspace project {plat_workspace}"
             print(f"[PASSED] Verified no .opencode directory inside {plat_workspace}")
 
-        # Assertions for SPOQ Active Epics directory
-        spoq_epic_dir = opencode_dir / context.space_name / "spoq" / "epics" / "active" / ticket.id
+        # Assertions for SPOQ Map + Active Epic directory
+        assert spoq_map_dir.exists(), f"Expected SPOQ map folder {spoq_map_dir} to exist."
+        assert (spoq_map_dir / "MAP.md").exists(), "Expected MAP.md to exist."
         assert spoq_epic_dir.exists(), f"Expected SPOQ epic folder {spoq_epic_dir} to exist."
-        assert (spoq_epic_dir / "tasks").exists(), "Expected SPOQ tasks folder to exist."
         assert (spoq_epic_dir / "EPIC.md").exists(), "Expected SPOQ EPIC.md to exist."
-        print(f"[PASSED] Verified SPOQ epic task queue generated at {spoq_epic_dir}")
+        from ebdev.core.spoq_map import EPICS_DIRNAME
+        if EPICS_DIRNAME:
+            assert spoq_epic_dir.parent.name == EPICS_DIRNAME, f"Expected epic to live under the map {EPICS_DIRNAME}/ directory."
+        else:
+            assert spoq_epic_dir.parent == spoq_map_dir, "Expected epic to live directly under the map directory."
+        print(f"[PASSED] Verified SPOQ map and epic artifacts at {spoq_map_dir} / {spoq_epic_dir}")
 
-        # Assert no spoq folders in workspace
+        # Assert SPOQ data is rooted at the workspace level, not inside platform repos.
         spoq_in_workspace = workspace_dir / "spoq"
-        assert not spoq_in_workspace.exists(), "Error: spoq directory should NOT exist in the workspace root."
-        print("[PASSED] Verified no spoq directory exists in workspace root.")
+        assert spoq_in_workspace.exists(), "Expected spoq directory to exist at the workspace root."
+        print("[PASSED] Verified spoq directory exists at the workspace root.")
 
         print("\n=== ALL PATH ISOLATION VERIFICATIONS PASSED SUCCESSFULLY! ===")
     finally:

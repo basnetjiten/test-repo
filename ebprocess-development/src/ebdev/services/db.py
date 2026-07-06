@@ -104,13 +104,13 @@ async def update_job_status(result: JobResult) -> bool:
                             warnings = EXCLUDED.warnings,
                             updated_at = NOW();
                         """,
-                        result.job_id,
+                        result.task_id,
                         result.status,
                         result.summary,
                         result.errors,
                         result.warnings,
                     )
-                    logger.info("Job %s updated in Postgres.", result.job_id)
+                    logger.info("Task %s updated in Postgres.", result.task_id)
                     return True
                 finally:
                     await conn.close()
@@ -119,7 +119,7 @@ async def update_job_status(result: JobResult) -> bool:
 
     # Local Fallback
     data = _load_json(_JOBS_JSON_PATH)
-    data[result.job_id] = {
+    data[result.task_id] = {
         "status": result.status,
         "summary": result.summary,
         "errors": result.errors,
@@ -127,19 +127,19 @@ async def update_job_status(result: JobResult) -> bool:
         "pr_url": result.pr_url,
     }
     _save_json(_JOBS_JSON_PATH, data)
-    logger.info("Job %s updated in fallback JSON.", result.job_id)
+    logger.info("Task %s updated in fallback JSON.", result.task_id)
     return True
 
 
 async def save_session_id(
-    job_id: str, session_id: str, jira_id: str | None = None
+    task_id: str, session_id: str, jira_id: str | None = None
 ) -> bool:
     """
     Persist OpenCode session ID.
 
     Parameters
     ----------
-    job_id : str
+    task_id : str
         The unique ID of the job execution.
     session_id : str
         The active OpenCode session token.
@@ -169,11 +169,11 @@ async def save_session_id(
                             jira_id = COALESCE(EXCLUDED.jira_id, jobs.jira_id),
                             updated_at = NOW();
                         """,
-                        job_id,
+                        task_id,
                         session_id,
                         jira_id,
                     )
-                    logger.info("Session ID %r saved for job %s in Postgres.", session_id, job_id)
+                    logger.info("Session ID %r saved for task %s in Postgres.", session_id, task_id)
                     return True
                 finally:
                     await conn.close()
@@ -182,22 +182,22 @@ async def save_session_id(
 
     # Fallback
     data = _load_json(_SESSIONS_JSON_PATH)
-    data[job_id] = {
+    data[task_id] = {
         "opencode_session_id": session_id,
         "jira_id": jira_id,
     }
     _save_json(_SESSIONS_JSON_PATH, data)
-    logger.info("Session ID %r saved for job %s in fallback JSON.", session_id, job_id)
+    logger.info("Session ID %r saved for task %s in fallback JSON.", session_id, task_id)
     return True
 
 
-async def get_session_id(job_id: str) -> str | None:
+async def get_session_id(task_id: str) -> str | None:
     """
     Retrieve stored OpenCode session ID for a job.
 
     Parameters
     ----------
-    job_id : str
+    task_id : str
         The unique job ID.
 
     Returns
@@ -216,7 +216,7 @@ async def get_session_id(job_id: str) -> str | None:
                 try:
                     row = await conn.fetchrow(
                         "SELECT opencode_session_id FROM jobs WHERE job_id = $1;",
-                        job_id,
+                        task_id,
                     )
                     return row["opencode_session_id"] if row else None
                 finally:
@@ -226,7 +226,7 @@ async def get_session_id(job_id: str) -> str | None:
 
     # Fallback
     data = _load_json(_SESSIONS_JSON_PATH)
-    job_info = data.get(job_id)
+    job_info = data.get(task_id)
     return job_info.get("opencode_session_id") if job_info else None
 
 
@@ -269,7 +269,7 @@ async def get_session_id_by_jira_id(ticket_id: str) -> str | None:
 
     # Fallback
     data = _load_json(_SESSIONS_JSON_PATH)
-    for job_id, val in data.items():
+    for task_id, val in data.items():
         if val.get("jira_id") == ticket_id and val.get("opencode_session_id"):
             return val.get("opencode_session_id")
     return None

@@ -7,6 +7,8 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import yaml
+
 # Ensure src directory is in python path for local execution of scratch scripts
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -29,6 +31,25 @@ async def run_test():
         description="Implement local-first cache and background sync offline database storage on mobile, and REST API session validation on backend.",
         status="To Do",
         acceptance_criteria=["Offline synchronization operational", "Client-Server Contract verified"],
+        tasks=[
+            {
+                "id": 50101,
+                "name": "Implement auth session storage",
+                "status": "todo",
+                "hours": [
+                    {"estimatedHour": 1.0, "taskId": 50101, "platformId": 1, "platform": {"id": 1, "name": "flutter"}},
+                    {"estimatedHour": 1.0, "taskId": 50101, "platformId": 3, "platform": {"id": 3, "name": "api"}},
+                ],
+            },
+            {
+                "id": 50102,
+                "name": "Background sync and validation",
+                "status": "todo",
+                "hours": [
+                    {"estimatedHour": 1.0, "taskId": 50102, "platformId": 1, "platform": {"id": 1, "name": "flutter"}},
+                ],
+            },
+        ],
         figma_url=None
     )
 
@@ -60,17 +81,41 @@ async def run_test():
             progress_callback(f"Running mock actions for {platform}")
             
         if "plan" in agent:
-            # Write plan file into project-scoped storage: .opencode/<space_name>/<platform>_plan.md
-            storage = ctx.project_storage_dir(config.OPENCODE_PROJECT_DIR)
-            plan_file = storage / f"{platform}_plan.md"
-            plan_content = (
-                f"# Implementation Plan - {platform.upper()}\n\n"
-                "## Scope\n"
-                f"Implement session and auth tokens on {platform.upper()}.\n\n"
-                "## Changes\n"
-                f"- src/{platform}_auth: Define handlers and methods\n"
-            )
-            plan_file.write_text(plan_content, encoding="utf-8")
+            if ctx.spoq_epic_dir and ctx.active_task_id:
+                yaml_path = Path(ctx.spoq_epic_dir) / f"{ctx.active_task_id}.yml"
+                yaml_path.write_text(
+                    yaml.safe_dump(
+                        {
+                            "id": ctx.active_task_id,
+                            "title": f"Plan for {platform}",
+                            "epic": ctx.ticket_id,
+                            "description": (
+                                f"## Objective\nCreate a concrete implementation plan for {platform}.\n\n"
+                                "## Steps\n1. Audit the codebase.\n2. Implement the required changes.\n3. Validate the result.\n"
+                            ),
+                            "status": "pending",
+                            "phase": 0,
+                            "dependencies": [],
+                            "skills_required": [platform],
+                            "files_to_touch": [f"src/{platform}/placeholder.txt"],
+                            "outputs": [f"{platform} output"],
+                            "acceptance_criteria": ["Plan is detailed enough for execution."],
+                        },
+                        sort_keys=False,
+                    ),
+                    encoding="utf-8",
+                )
+            else:
+                storage = ctx.project_storage_dir(config.OPENCODE_PROJECT_DIR)
+                plan_file = storage / f"{platform}_plan.md"
+                plan_content = (
+                    f"# Implementation Plan - {platform.upper()}\n\n"
+                    "## Scope\n"
+                    f"Implement session and auth tokens on {platform.upper()}.\n\n"
+                    "## Changes\n"
+                    f"- src/{platform}_auth: Define handlers and methods\n"
+                )
+                plan_file.write_text(plan_content, encoding="utf-8")
             
             return JobResult(
                 job_id=ctx.ticket_id,

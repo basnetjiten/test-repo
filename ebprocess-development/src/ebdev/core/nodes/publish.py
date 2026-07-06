@@ -140,7 +140,7 @@ async def publish_node(state: GraphState) -> GraphState:
                 new_result = state.result.model_copy(update={"pr_url": primary_pr})
             else:
                 new_result = JobResult(
-                    job_id=ctx.ticket_id,
+                    task_id=ctx.ticket_id,
                     space_name=ctx.space_name,
                     ticket_id=ctx.ticket_id,
                     status="success",

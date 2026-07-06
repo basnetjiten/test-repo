@@ -19,7 +19,7 @@ You diagnose concrete backend NestJS bugs, identify controlling code paths, and 
 - **App code**: `apps/api/src/`
 - **Data-access lib**: `libs/data-access/src/`
 - **Common lib**: `libs/common/`
-- Read `.opencode/context/navigation.md` (Quick Routes → API), then `api/navigation.md` to find the relevant architecture and component context files
+- Read `/.opencode/context/navigation.md` (Quick Routes → API), then `api/navigation.md` to find the relevant architecture and component context files
 
 ## Workflow
 1. Locate failure point from logs, test suites, or exceptions (e.g. HTTP filter logs, GraphQL error responses).
@@ -29,7 +29,7 @@ You diagnose concrete backend NestJS bugs, identify controlling code paths, and 
    - Auth error → Check guard → strategy → token service
    - Database error → Check schema → repository → BaseRepo method
 3. Patch the narrowest slice of code (Mongoose schema, repository, service, resolver) that resolves the bug.
-4. Read `.opencode/context/navigation.md` (Quick Routes → API) then `api/navigation.md` if you need to understand the project conventions.
+4. Read `/.opencode/context/navigation.md` (Quick Routes → API) then `api/navigation.md` if you need to understand the project conventions.
 5. Validate locally by running `npm run build` or `npm run lint`.
 
 ## Common Bug Patterns in This Codebase

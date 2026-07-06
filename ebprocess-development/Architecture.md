@@ -1,14 +1,14 @@
 # Multi-Agent Platform & Orchestration Architecture
 
-This document provides a comprehensive view of the **ebprocess-development** system. It describes how the stateful pipeline coordinates multiple specialist agents to execute complex, multi-project, multi-platform development tasks using LangGraph, OpenCode, and **SPOQ (Specialist Orchestrated Queuing)**.
+This document provides a comprehensive view of the **ebprocess-development** system. It describes how the stateful pipeline coordinates multiple specialist agents to execute complex, multi-project, multi-platform development tasks using LangGraph, OpenCode, and **SPOQ (Specialist Orchestrated Queuing)** (arXiv:2606.03115v1).
 
 ---
 
 ## 1. High-Level System Architecture
 
-The core of `ebprocess-development` is a **stateful orchestration graph** built on top of **LangGraph**. The pipeline coordinates repository setup, ticket analysis, specialist planning, source code generation, automated verification (linters/tests), contract checking, and publishing.
+The core of `ebprocess-development` is a **stateful orchestration graph** built on **LangGraph**. The pipeline coordinates epic creation, task decomposition, wave-based dispatch, source code generation, code validation (8-metric scoring), contract verification, and publishing.
 
-Multiple independent projects (e.g. *Project Alpha*, *Project Beta*) can run **concurrently** through the same pipeline because all per-project state — plan files, task contexts, and SPOQ queues — is **isolated by `space_name`** inside the `.opencode/<space_name>/` storage directory.
+Multiple independent projects run **concurrently** because all per-project state — epics, tasks, journals — is **isolated by `space_name`** inside the `spoq/` directory.
 
 ### LangGraph Stateful Pipeline
 
@@ -55,54 +55,65 @@ graph TD
     style Finalize fill:#0F172A,stroke:#38BDF8,stroke-width:2px,color:#fff
 ```
 
+Each `generate_node` invocation dispatches a builder agent, which writes code then invokes the **`@code_evaluator`** — an independent reviewer that scores the output against 8 quality metrics before marking the task complete.
+
 ---
 
 ## 2. Multi-Project Workspace Isolation
 
-Each project is identified by a **`space_name`** (e.g. `"ebsprinter"`, `"ebprocess"`). All pipeline nodes resolve storage paths through `JobContext.project_storage_dir()`, ensuring **zero cross-project collisions** when multiple LangGraph runs execute concurrently.
+Each project is identified by a **`space_name`** (e.g. `"ebsprinter"`, `"ebprocess"`). All pipeline nodes resolve storage paths through `JobContext.project_storage_dir()`, ensuring **zero cross-project collisions**.
 
 ### Directory Layout
 
 ```text
 workspace/                               ← runtime project checkouts
-├── ebmobileapp/                         ← space_name (repository root)
-│   ├── .ebpearls/                       ← project-scoped storage (In-Repo pattern)
-│   │   ├── tasks/
-│   │   │   ├── EPIC-101_api_context.json
-│   │   │   └── EPIC-101_flutter_context.json
-│   │   ├── EPIC-101_api_plan.md
-│   │   ├── EPIC-101_flutter_plan.md
-│   │   └── epics/
-│   │       └── active/EPIC-101/
-│   │           ├── EPIC.md
-│   │           └── tasks/
-│   │               ├── 00-contract.yml
-│   │               └── 01-flutter.yml
-│   │
-│   ├── ebmobileapp-services/            ← platform (API checkout)
-│   └── ebmobileapp_flutter/             ← platform (Flutter checkout)
+└── {space_name}/                        ← e.g. ebmobileapp
+    ├── spoq/                            ← SPOQ root
+    │   ├── ROADMAP.md                   ← Cross-epic registry
+    │   ├── Epic-{id}/                   ← e.g. Epic-44445
+    │   │   ├── EPIC.md                  ← Goal, architecture, DAG, wave assignments
+    │   │   ├── {task-name}.yml          ← Task YAML (named by ticket name)
+    │   │   ├── context_api.json         ← Platform context (generated)
+    │   │   ├── context_flutter.json     ← Platform context (generated)
+    │   │   └── journals/                ← Agent session journals
+    │   │       ├── 2026-07-05_development_builder.md
+    │   │       └── JOURNAL.md           ← Consolidated
+    │   └── Epic-{id}/                   ← Multiple epics can coexist
+    │       └── ...
+    │
+    ├── .ebpearls/                       ← Legacy task storage (migrating to spoq/)
+    │   └── ...
+    │
+    ├── {space_name}-services/           ← API platform (NestJS)
+    └── {space_name}_flutter/            ← Flutter platform
 
-.opencode/                               ← gitignored; agent state and profiles
-├── agents/                              ← agent instructions (e.g. flutter_builder.md)
-├── sessions.json                        ← shared session registry (cross-project)
-└── jobs.json                            ← shared job registry (cross-project)
+.opencode/                               ← Agent state and profiles (gitignored)
+├── agents/                              ← Agent instruction files
+│   ├── multi_agent_orchestrator.md
+│   ├── code_evaluator.md                ← Independent reviewer
+│   ├── api_builder.md / flutter_builder.md
+│   └── ...
+├── skills/                              ← Reusable skill definitions
+│   ├── agent-validation/SKILL.md        ← 8-metric code validation rubric
+│   ├── journal-tracker/SKILL.md         ← Session journal format
+│   └── ...
+├── sessions.json
+└── jobs.json
 ```
 
-### Key Isolation Rule
+### Isolation Rule
 
-`JobContext.project_storage_dir(base)` resolves to `<workspace_dir>/<space_name>/.ebpearls/` inside the target repository root. This is the **single canonical method** used by all nodes to resolve plan files, context files, and SPOQ directories. By using an In-Repo pattern, the `.ebpearls` folder can be version-controlled natively with the project.
-
-Furthermore, task context files and plans are scoped by the `job_id` (e.g., `EPIC-101_api_context.json`) to prevent race conditions and overwrites when the factory executes multiple epics in parallel for the same project. The shared registries (`sessions.json`, `jobs.json`) use `<ticket_id>_<platform>` keyed entries so concurrent projects never overwrite each other's session mappings.
+`JobContext.project_storage_dir()` resolves to `<workspace_dir>/<space_name>/.ebpearls/`. All SPOQ data uses paths relative to the workspace project root. No two projects share state.
 
 ---
 
 ## 3. Orchestration Strategies & Execution Modes
 
-The `orchestrate_node` parses ticket properties (summary, description, acceptance criteria) and active platforms to choose an `OrchestrationStrategy`.
+The `orchestrate_node` parses ticket properties to choose an `OrchestrationStrategy`.
 
 ### Decision Process
 
-1. **LLM Evaluation**: Dispatches to the `multi_agent_orchestrator` agent on the OpenCode server to evaluate complexity and return a structured `OrchestrationStrategy` schema.
+1. **LLM Evaluation**: Dispatches to `multi_agent_orchestrator` agent to evaluate complexity and return a structured `OrchestrationStrategy` schema.
 2. **Rule-Based Heuristic Fallback**: If the LLM call fails, applies regex keyword classification:
    - **Offline-First Detection**: Scans for `offline`, `local storage`, `sqlite`, `hive`, `drift`, `isar`, `cache`.
    - **UI/UX-Only Detection**: Presentation keywords (`style`, `screen`, `widget`) with no backend elements (`api`, `db`, `migration`).
@@ -125,112 +136,244 @@ The `orchestrate_node` parses ticket properties (summary, description, acceptanc
 |:---|:---|
 | **Sequential** | Platforms execute one after another (wave-based `stages` list) |
 | **Parallel** | All platforms run concurrently with `asyncio.gather` |
-| **SPOQ** | Wave-based DAG dispatch — complex multi-platform epics with dependency ordering |
+| **SPOQ** | Wave-based DAG dispatch with topological sort, code validation gate, and epic lifecycle |
 
 ---
 
 ## 4. Specialist Orchestrated Queuing (SPOQ)
 
-SPOQ organizes multi-platform epics into a **Direct Acyclic Graph (DAG)** of `SPOQTask` YAML files. Tasks are dispatched in **waves** based on completed dependencies.
+SPOQ is a published methodology (arXiv:2606.03115v1) for multi-agent software engineering. It combines wave-based topological dispatch, dual validation gates, and human-as-agent integration. Our implementation adopts the four-stage pipeline, 8-code-metric validation gate, journal tracking with confidence scores, and epic lifecycle management.
 
-### SPOQ Task Schema (`SPOQTask`)
+### Four-Stage Pipeline
 
-| Field | Description |
-|:---|:---|
-| `id` | Unique task ID (e.g. `00-contract`, `01-flutter`) |
-| `phase` | Execution wave number |
-| `dependencies` | List of task IDs that must be `completed` first |
-| `skills_required` | Platforms to activate (e.g. `["api", "flutter"]`) |
-| `files_to_touch` | Hints for the builder agent |
-| `outputs` | Expected deliverables |
-| `acceptance_criteria` | Validation pass conditions |
+```mermaid
+graph LR
+    subgraph "Stage 1: Epic Planning"
+        A["Orchestrator: Create skeleton YAMLs"] -->|Dispatch planners| B["@api_planner / @flutter_planner: Enrich YAMLs"]
+    end
+    subgraph "Stage 2: Wave Execution"
+        B["Orchestrator: Compute Waves"] -->|Topological Sort| C
+    end
+    subgraph "Stage 3: Code Validation"
+        C["Builder + @code_evaluator"] -->|avg ≥ 95, min ≥ 80| D
+    end
+    subgraph "Stage 4: Epic Completion"
+        D["Orchestrator: Move to complete/"]
+    end
 
-### Example Wave Dispatch
+    style A fill:#1E293B,stroke:#0EA5E9,stroke-width:2px,color:#fff
+    style B fill:#1E293B,stroke:#0EA5E9,stroke-width:2px,color:#fff
+    style C fill:#1E293B,stroke:#10B981,stroke-width:2px,color:#fff
+    style D fill:#1E293B,stroke:#0EA5E9,stroke-width:2px,color:#fff
+```
+
+### Epic Directory Structure
+
+Each epic occupies its own directory under `spoq/`:
+
+```
+spoq/
+  ROADMAP.md                    ← Centralized epic registry (status: planned → in-progress → done)
+  Epic-{id}/                    ← e.g. Epic-44445 (one directory per epic)
+    EPIC.md                     ← Goal, architecture, dependency DAG, wave assignments
+    {task-name}.yml             ← Task YAML (named by ticket name, e.g. contract-41831.yml)
+    context_api.json            ← Platform context (generated by orchestrator)
+    context_flutter.json
+    journals/                   ← Agent session journals
+```
+
+### Task YAML Schema
+
+Each task file follows a standardized schema (SPOQ Definition 5.1) with three field categories:
+
+**Identity Fields:**
+```yaml
+id: 01-create-schema
+title: Create Enquiry Mongo Schema
+epic: example-enquiry
+```
+
+**Execution Control Fields:**
+```yaml
+status: pending              # pending | in_progress | completed | blocked
+priority: high
+phase: 0                     # Wave assignment (0 = no dependencies)
+estimate:                    # PERT three-point estimate
+  optimistic: 30m
+  realistic: 1h
+  pessimistic: 2h
+dependencies: []             # Task IDs that must complete first
+skills_required:
+  - api-schema
+  - mongoose
+```
+
+**Deliverable & Verification Fields:**
+```yaml
+files_to_touch:
+  - libs/data-access/src/enquiry/enquiry.schema.ts
+outputs:
+  - "Enquiry Mongoose schema with timestamps"
+acceptance_criteria:
+  - "[ ] TypeScript compiles without errors"
+  - "[ ] Schema has all required fields"
+description: |
+  ## Objective
+  Create the Enquiry MongoDB schema.
+  ## Steps
+  1. Create schema file...
+```
+
+### Wave-Based Topological Dispatch
+
+Wave assignment is computed via topological sort (Kahn's algorithm). Tasks in the same phase have no dependencies on each other and execute concurrently.
 
 ```mermaid
 graph TD
-    subgraph "Wave 0: API Contract"
-        T1["00-contract: Define OpenAPI & Data Models"]
+    subgraph "Wave 0: Foundation"
+        T1["01-create-schema"]
     end
-    subgraph "Wave 1: Frontend Builders"
-        T2["01-flutter: Build Flutter Client"]
-        T3["01-web: Build Web Client"]
+    subgraph "Wave 1: Parallel API"
+        T2["02-create-mutation"]
+        T3["03-create-service"]
     end
-    subgraph "Wave 2: Integration"
-        T4["02-verify: Contract Verifier Validation"]
+    subgraph "Wave 2: Resolver"
+        T4["04-create-resolver"]
+    end
+    subgraph "Wave 3: Flutter Domain"
+        T5["05-create-flutter-domain"]
     end
 
     T1 --> T2
     T1 --> T3
     T2 --> T4
     T3 --> T4
-
-    style T1 fill:#1E293B,stroke:#0EA5E9,stroke-width:2px,color:#fff
-    style T2 fill:#1E293B,stroke:#0EA5E9,stroke-width:2px,color:#fff
-    style T3 fill:#1E293B,stroke:#0EA5E9,stroke-width:2px,color:#fff
-    style T4 fill:#1E293B,stroke:#10B981,stroke-width:2px,color:#fff
+    T4 --> T5
 ```
 
-After each `validate` pass in SPOQ mode, `get_active_wave_tasks()` reads the SPOQ epic directory and returns `pending` tasks whose `dependencies` are all `completed`. The graph loops back to `plan → generate → validate` until all tasks are done, then advances to `publish`.
+### Code Validation Gate (8 Metrics)
 
-### The "Dark Factory" Sprint Lifecycle
-To mimic human agile project planning (e.g. 2-week Sprints in Jira) in the fast-paced automated factory, we adapt from a **Time-Boxed** to a **Wave-Boxed (or Scope-Boxed)** execution model:
+After each task is implemented, the `@code_evaluator` agent independently scores the output against 8 metrics:
 
-1. **The "Sprint Batch" Trigger:** Product Owners group multiple Epics into a Sprint in a ticketing system. Instead of starting a 2-week timer, starting a sprint acts as a CI/CD pipeline trigger that submits the entire batch of Epics to the SPOQ orchestrator.
-2. **The "Micro-Sprint" Execution:** A 2-week human sprint becomes a 2-to-4 hour pipeline run. 
-   - *Wave 1 (Contract Phase):* The orchestrator designs all OpenAPI/GraphQL schemas for the sprint in parallel.
-   - *Wave 2 (Implementation Phase):* Once contracts are finalized, highly parallel swarms generate the frontend and backend of every Epic concurrently.
-   - *Wave 3 (Validation Phase):* Automated tests and linter agents grade the output.
-3. **Queueing and Concurrency:** The factory scales horizontally. Instead of 5 developers tackling tickets sequentially, the Dark Factory spawns agent pairs for every epic in parallel. The only blocking factors are topological dependencies (e.g., Epic B relies on Epic A).
-4. **Continuous Review (The Sprint Demo):** The pipeline only halts for human review (Human-as-an-Agent). Instead of waiting 2 weeks for a demo, Product Owners review automated PRs or staging environments throughout the afternoon, focusing on subjective UI/UX validation or business logic approval.
+| # | Metric | What It Checks | Platform-Specific |
+|---|--------|---------------|-------------------|
+| 1 | **SC** — Syntactic Correctness | Compiles without errors? | `tsc --noEmit` / `flutter analyze` |
+| 2 | **RF** — Requirements Fidelity | Matches task `acceptance_criteria`? | Compare code to YAML spec |
+| 3 | **SA** — SOLID Adherence | Follows SOLID principles? | NestJS module pattern / Clean Architecture |
+| 4 | **SE** — Security | OWASP Top 10 free? | Guards, validation, no injection |
+| 5 | **EH** — Error Handling | Failures handled gracefully? | `@Catch()` / `handleAPICall` |
+| 6 | **SL** — Scalability | Hot-path complexity? | Pagination, indexes, `ListView.builder` |
+| 7 | **CC** — Code Clarity | Readable and self-documenting? | Project convention conformance |
+| 8 | **CO** — Completeness | No TODOs/stubs? | No `FIXME`, no placeholders |
+
+**Pass criteria:** `avg(M₁…M₈) ≥ 95 AND min(M₁…M₈) ≥ 80`
+
+On failure: evaluator returns **≤20 line remediation** with `file:line` references and numbered action items. Builder applies fixes and re-submits (max 3 iterations).
+
+### Journal Tracking with Confidence Scoring
+
+Each agent session writes a journal entry with YAML frontmatter and structured Markdown body:
+
+```yaml
+---
+agent: Claude Code (Opus 4.5)
+start_time: 2026-07-05T10:00:00Z
+end_time: 2026-07-05T11:30:00Z
+confidence: 0.88
+session_type: development
+files_modified:
+  - libs/data-access/src/enquiry/enquiry.schema.ts
+tasks_completed: 1
+tasks_total: 3
+---
+```
+
+Confidence calibration: ≥0.95 production-ready, 0.85–0.94 well tested, 0.75–0.84 functional, 0.65–0.74 needs validation, <0.65 experimental.
+
+### Epic Lifecycle
+
+1. **Creation:** Orchestrator creates skeleton task YAMLs + EPIC.md → dispatches planners to enrich YAMLs with description, files_to_touch, acceptance_criteria → `spoq/Epic-{id}/`
+2. **Execution:** Orchestrator computes waves, dispatches builders, invokes evaluator per task. ROADMAP.md → `in-progress`
+3. **Validation:** Each task scored against 8 metrics; failed tasks enter remediation loop
+4. **Completion:** All tasks passed → ROADMAP.md → `done`. No filesystem move needed.
+5. **Commit:** Branch-per-epic with squash-merge to main. Commits at wave boundaries.
 
 ---
 
 ## 5. Specialist Agent Pool
 
-All agent profiles live in `.opencode/agents/`. Primary agents are invoked directly by pipeline nodes. Subagents are **delegated to via `@agent-name` syntax** inside primary agent prompts — OpenCode spawns them as nested task processes.
+All agent profiles live in `.opencode/agents/`. Primary agents are invoked directly by pipeline nodes. Subagents are delegated via `@agent-name` syntax.
 
 ### Primary Agents
 
-| Agent | Platform / Layer | Primary Responsibility |
+| Agent | Platform | Responsibility |
 |:---|:---|:---|
-| `multi_agent_orchestrator` | Cross-Platform | Parses tickets, returns `OrchestrationStrategy` JSON |
-| `api_planner` | API (NestJS / FastAPI) | Audits modules, writes `api_plan.md` |
-| `api_builder` | API (NestJS / FastAPI) | Implements schemas, controllers, repositories, and tests |
-| `flutter_planner` | Flutter / Dart | Reviews widget trees, writes `flutter_plan.md` |
-| `flutter_builder` | Flutter / Dart | Generates Dart widgets, models, controllers, runs `build_runner` |
-| `web_planner` | React / Next.js | Plans components, state hooks, routing |
-| `web_builder` | React / Next.js | Scaffolds TypeScript pages, styles, and integration tests |
-| `bug_fixer` | Cross-Platform | Diagnoses and patches compiler or runtime failures |
-| `ui_refiner` | Flutter / Web | Applies pixel-accurate UI polish against Figma specs |
+| `multi_agent_orchestrator` | Cross-Platform | Creates epics, computes waves, dispatches builders, manages lifecycle |
+| `code_evaluator` | Cross-Platform | Independent 8-metric code reviewer (read-only) |
+| `api_planner` | API (NestJS) | Audits modules, enriches task YAML description/files_to_touch/acceptance_criteria |
+| `api_builder` | API (NestJS) | Implements schemas, DTOs, services, resolvers, modules |
+| `flutter_planner` | Flutter | Reviews widget trees, enriches task YAML description/files_to_touch/acceptance_criteria |
+| `flutter_builder` | Flutter | Generates domain/data/state/UI layers |
+| `web_planner` | React/Next.js | Plans components and routing |
+| `web_builder` | React/Next.js | Scaffolds pages and styles |
+| `api_bug_fixer` | API | Diagnoses and patches backend failures |
+| `flutter_bug_fixer` | Flutter | Diagnoses and patches Flutter failures |
 
-### Subagents (Delegated via `@` in Builder Prompts)
+### Subagents (Delegated via `@`)
 
 | Subagent | Delegated From | Responsibility |
 |:---|:---|:---|
-| `@domain` | `flutter_builder` | Dart entity, repository interface, and use-case generation |
-| `@data` | `flutter_builder` | Remote data sources, DTOs, and API adapters |
-| `@state` | `flutter_builder` | Riverpod/BLoC provider and state management wiring |
-| `@ui` | `flutter_builder` | Widget tree, screen layouts, and routing |
-| `@linter` | `flutter_builder` | Post-generation Dart analysis and auto-fix pass |
-| `@design_system` | `flutter_builder` / `@ui` | Design tokens, theme constants, and shared style utilities |
-| `@graphql` | `api_builder` | GraphQL schema, resolver, and query generation |
-| `@localization` | `flutter_builder` / `@ui` | ARB file generation and l10n integration |
-| `@contract_verifier` | `generate_node` | Backend schema vs. frontend model cross-verification |
-| `@figma_assets` | `flutter_planner` | Figma URL extraction of design tokens and visual specs |
+| `@api_schema_builder` | `api_builder` | Mongoose schemas, BaseRepo repos |
+| `@api_dto_generator` | `api_builder` | GraphQL InputType/ObjectType, validation |
+| `@api_service_builder` | `api_builder` | Business logic, @Transactional(), i18n |
+| `@api_route_builder` | `api_builder` | GraphQL resolvers, REST controllers, guards |
+| `@api_module_integrator` | `api_builder` | Module wiring, mongoose-models.ts + providers.ts |
+| `@api_linter` | `api_builder` | ESLint + Prettier on changed files |
+| `@api_localization` | `api_builder` | i18n JSON catalog management |
+| `@api_contract_verifier` | `contract_node` | Cross-platform GraphQL contract checks |
+| `@flutter_domain` | `flutter_builder` | Domain models + abstract repository interfaces |
+| `@flutter_graphql` | `flutter_builder` | .graphql operation files, schema refresh |
+| `@flutter_data` | `flutter_builder` | Freezed models, data sources, repo impls |
+| `@flutter_state` | `flutter_builder` | SimplexCubit + freezed state |
+| `@flutter_ui` | `flutter_builder` | Pages and widgets, Bloc wiring |
+| `@flutter_ui_refiner` | `flutter_builder` | Visual polish, spacing, tokens |
+| `@flutter_design_system` | `flutter_builder` | Token/spacing review |
+| `@flutter_localization` | `flutter_builder` | ARB file management |
+| `@flutter_linter` | `flutter_builder` | `flutter analyze`, targeted fixes |
+| `@flutter_figma_assets` | `flutter_planner` | Figma design token extraction |
 
-### Subagent Delegation Pattern
+### Delegation Patterns
 
 ```
-flutter_builder (Primary)
-    ├── @domain  → lib/domain/entities/, use_cases/
-    ├── @data    → lib/data/models/, repositories/, data_sources/
-    ├── @state   → lib/presentation/providers/ or blocs/
-    ├── @ui      → lib/presentation/screens/, widgets/
-    │   └── @design_system  → lib/core/theme/
-    │   └── @localization   → lib/l10n/
-    └── @linter  → runs flutter analyze --fix
+api_builder → @api_schema_builder → @api_dto_generator → @api_service_builder
+           → @api_route_builder → @api_module_integrator → @api_linter
+           → @code_evaluator (after each task)
+
+flutter_builder → @flutter_domain → @flutter_graphql → @flutter_data
+               → @flutter_state → @flutter_ui → @flutter_ui_refiner
+               → @flutter_design_system → @flutter_localization → @flutter_linter
+               → @code_evaluator (after each task)
 ```
+
+### Skill Framework
+
+Reusable capabilities live in `.opencode/skills/`:
+
+| Skill | Purpose |
+|:---|:---|
+| `agent-validation` | 8-metric code scoring rubric (SC, RF, SA, SE, EH, SL, CC, CO) |
+| `journal-tracker` | Session journal format with confidence calibration |
+| `api-scaffolder` | NestJS module, service, resolver patterns |
+| `nestjs-graphql-resolvers` | Code-first GraphQL types and resolvers |
+| `nestjs-i18n-localization` | Translation key management |
+| `feature-scaffolder` | Flutter Clean Architecture directory scaffolding |
+| `api-integration` | Freezed models, GraphQL sources, repos |
+| `state-management` | SimplexCubit, FormMixin, handleAPICall |
+| `ui-generator` | Flutter page and widget generation |
+| `design-system` | Token migration, responsive sizing |
+| `localization` | ARB extraction and l10n refactoring |
+| `graphql-client-codegen` | Schema sync and Ferry codegen |
+| `compiler-diagnostics-resolver` | TypeScript/Flutter error pattern matching |
 
 ---
 
@@ -246,40 +389,50 @@ sequenceDiagram
     participant Repo as Target Project Repo
 
     Note over Pipeline,Repo: 1. Setup & Workspace Isolation
-    Pipeline->>DB: Fetch job details & context (keyed by space_name + ticket_id)
+    Pipeline->>DB: Fetch job details (keyed by space_name + ticket_id)
     Pipeline->>git: Clone into workspace/<space_name>/<platform>/
-    Pipeline->>Repo: Resolve dependencies (pub get / npm install / pip install)
+    Pipeline->>Repo: Resolve dependencies (pub get / npm install)
 
-    Note over Pipeline,Repo: 2. Strategy Architecture Selection
+    Note over Pipeline,Repo: 2. Epic Creation & Planning Enrichment
     Pipeline->>OpenCode: Dispatch to multi_agent_orchestrator
-    OpenCode-->>Pipeline: OrchestrationStrategy (mode, complexity, mocking_level)
+    OpenCode->>Repo: Create spoq/Epic-{id}/
+    OpenCode->>Repo: Write EPIC.md + skeleton task YAMLs + context files
+    OpenCode->>OpenCode: Dispatch @api_planner / @flutter_planner
+    OpenCode->>Repo: Enrich task YAMLs (description, files_to_touch, acceptance_criteria)
+    OpenCode-->>Pipeline: OrchestrationStrategy (mode, waves)
 
-    Note over Pipeline,Repo: 3. Planning & Building Iteration Loop
-    loop Every SPOQ wave / platform
-        Pipeline->>OpenCode: Dispatch to specialized planner (api_planner / flutter_planner)
-        OpenCode->>Repo: Audit repository structure
-        OpenCode-->>Pipeline: Write <platform>_plan.md to .opencode/<space_name>/
+    Note over Pipeline,Repo: 3. Wave Execution with Code Validation
+    loop Every SPOQ wave
+        Pipeline->>OpenCode: Dispatch to @api_builder / @flutter_builder
+        OpenCode->>OpenCode: Delegate to subagents per layer
+        OpenCode->>Repo: Write code to filesystem
 
-        Pipeline->>OpenCode: Dispatch to specialist builder (api_builder / flutter_builder)
-        OpenCode->>OpenCode: Delegate to @domain, @data, @state, @ui, @linter subagents
-        OpenCode->>Repo: Implement models, routes, widgets, controllers
-        OpenCode-->>Pipeline: Execution complete
-
-        Pipeline->>Repo: Run automated tests/linters (pytest / npm test / flutter analyze)
-        alt Test Fails
-            Pipeline->>OpenCode: Send logs to bug_fixer agent
-            OpenCode->>Repo: Modify files to resolve errors
+        Note over OpenCode: Independent Code Validation
+        OpenCode->>OpenCode: Invoke @code_evaluator
+        OpenCode->>Repo: Read written code + task YAML
+        OpenCode->>OpenCode: Score 8 metrics (SC, RF, SA, SE, EH, SL, CC, CO)
+        alt avg ≥ 95 AND min ≥ 80
+            OpenCode->>Repo: Write journal entry with confidence score
+            OpenCode-->>Pipeline: Task passed
+        else
+            OpenCode->>OpenCode: Generate ≤20 line remediation
+            OpenCode->>Repo: Apply fixes
+            OpenCode->>OpenCode: Re-score (max 3 iterations)
         end
+
+        Pipeline->>Repo: Commit at wave boundary
     end
 
-    Note over Pipeline,Repo: 4. Contract Auditing
-    Pipeline->>OpenCode: Invoke @contract_verifier
-    OpenCode->>Repo: Compare Pydantic/NestJS schemas against Dart/TypeScript models
-    OpenCode-->>Pipeline: Verification status (pass / diff report)
+    Note over Pipeline,Repo: 4. Epic Completion
+    Pipeline->>Repo: Update spoq/ROADMAP.md → status: done
 
-    Note over Pipeline,Repo: 5. Publishing
-    Pipeline->>git: Commit generated changes on feature branch
-    Pipeline->>git: Push branch & create Pull Request (GitHub/Bitbucket)
+    Note over Pipeline,Repo: 5. Contract Auditing
+    Pipeline->>OpenCode: Invoke @contract_verifier
+    OpenCode-->>Pipeline: Verification status (pass / diff)
+
+    Note over Pipeline,Repo: 6. Publishing
+    Pipeline->>git: Squash-merge branch to main
+    Pipeline->>git: Create Pull Request
     Pipeline->>DB: Write final status, session IDs, PR URL
 ```
 
@@ -289,20 +442,48 @@ sequenceDiagram
 
 ### `JobContext` — Pipeline Execution Context
 
-Carries all parameters for a single job. The `space_name` field drives all workspace and storage path resolution.
+| Field | Type | Description |
+|:---|:---|:---|
+| `task_id` | `str` | Unique task identifier |
+| `space_name` | `str` | Project identifier — drives workspace and storage resolution |
+| `ticket_id` | `str` | Ticket/epic identifier (e.g. `ENQ-5`) |
+| `ticket` | `SprintTicket` | Full ticket data with nested EpicTask list |
+| `repo_path` | `str` | Resolved host path: `workspace/<space_name>/` |
+| `platforms` | `List[str]` | Active platforms: `api`, `flutter`, `web` |
+| `spoq_epic_dir` | `Optional[str]` | Path to active SPOQ epic directory |
+| `active_task_id` | `Optional[str]` | Current task within the epic |
+| `starter_types` | `Dict[str, str]` | Per-platform scaffold: `{"api": "nestjs", "flutter": "flutter"}` |
+| `mocking_level` | `str` | `live` / `mock_repositories` / `ui_stubs` |
+| `offline_first` | `bool` | Enable offline-first patterns |
+
+### `SprintTicket` — Epic / Ticket Model
 
 | Field | Type | Description |
 |:---|:---|:---|
-| `space_name` | `str` | Project identifier — used as workspace and storage key |
-| `ticket_id` | `str` | Ticket/issue identifier (e.g. `EPIC-101`) |
-| `platforms` | `List[str]` | Active platforms: `api`, `flutter`, `web`, `cms` |
-| `repo_path` | `str` | Resolved host path: `workspace/<space_name>/` |
-| `spoq_epic_dir` | `Optional[str]` | Path to active SPOQ epic directory |
-| `starter_types` | `Dict[str, str]` | Per-platform scaffold: `{"api": "nestjs", "flutter": "flutter"}` |
-| `ticket_label` | `str` | `feature` / `bug` / `ui_refine` — controls agent selection |
-| `mocking_level` | `str` | `live` / `mock_repositories` / `ui_stubs` |
+| `id` | `str` | Ticket identifier |
+| `title` | `str` | Human-readable title |
+| `tasks` | `List[EpicTask]` | Nested tasks with per-platform hour estimates |
 
-**`project_storage_dir(base)`** → resolves `.opencode/<space_name>/` and creates it if needed. All plan files, task contexts, and SPOQ directories are written under this path.
+### `EpicTask` — Task Within an Epic
+
+| Field | Type | Description |
+|:---|:---|:---|
+| `id` | `int` | Task identifier |
+| `name` | `str` | Task name |
+| `status` | `str` | `pending` / `in_progress` / `completed` |
+| `hours` | `List[EpicTaskHour]` | Per-platform hour estimates |
+| `active_platforms` | `List[str]` (property) | Platforms with > 0 estimated hours |
+
+### `SPOQTask` — YAML Task Schema
+
+| Field | Type | Description |
+|:---|:---|:---|
+| `id` | `str` | Unique task ID (e.g. `01-create-schema`) |
+| `phase` | `int` | Wave assignment (0 = no dependencies) |
+| `dependencies` | `List[str]` | Prerequisite task IDs |
+| `skills_required` | `List[str]` | Required domain skills |
+| `files_to_touch` | `List[str]` | Files the agent may modify |
+| `acceptance_criteria` | `List[str]` | Verification checklist |
 
 ### `GraphState` — LangGraph Node State
 
@@ -322,62 +503,73 @@ Carries all parameters for a single job. The `space_name` field drives all works
 
 ```
 .
-├── docker-compose.yml              # Multi-container local execution setup
-├── pyproject.toml                  # Python package configuration (Poetry/Pyright)
-├── .gitignore                      # Excludes workspace/, .opencode/, .env
-├── workspace/                      # (gitignored) Runtime project checkouts
-│   └── <space_name>/
-│       └── <platform>/             # e.g. flutter/, api/, cms/
+├── Architecture.md                   ← This file
+├── docker-compose.yml                ← Multi-container local execution setup
+├── pyproject.toml                    ← Python package configuration (Poetry/Pyright)
+├── .gitignore                        ← Excludes workspace/, .opencode/, .env
 │
-├── .opencode/                      # (gitignored) Agent state and plans
-│   ├── sessions.json               # Shared session registry
-│   ├── jobs.json                   # Shared job registry
-│   ├── agents/                     # Agent profile definitions (19 agents)
+├── spoq/                             ← SPOQ reference template
+│   ├── ROADMAP.md                    ← Cross-epic registry
+│   └── Epic-44445/                   ← Sample epic template
+│       ├── EPIC.md
+│       ├── contract-41831.yml
+│       ├── api-impl-41831.yml
+│       ├── flutter-impl-41831.yml
+│       ├── integration-41831.yml
+│       └── journals/
+│
+├── workspace/                        ← (gitignored) Runtime project checkouts
+│   └── <space_name>/
+│       ├── spoq/epics/               ← Active epics created at runtime
+│       └── <platform>/
+│
+├── .opencode/                        ← (gitignored) Agent state and profiles
+│   ├── agents/                       ← 38 agent instruction files
 │   │   ├── multi_agent_orchestrator.md
-│   │   ├── flutter_planner.md / flutter_builder.md
-│   │   ├── api_planner.md / api_builder.md
-│   │   ├── web_planner.md / web_builder.md
-│   │   ├── domain.md / data.md / state.md / ui.md
-│   │   ├── linter.md / design_system.md / localization.md / graphql.md
+│   │   ├── code_evaluator.md         ← Independent 8-metric reviewer
+│   │   ├── api_builder.md / flutter_builder.md
+│   │   ├── api_planner.md / flutter_planner.md
+│   │   ├── web_builder.md / web_planner.md
+│   │   ├── api_schema_builder.md / api_dto_generator.md / ...
+│   │   ├── flutter_domain.md / flutter_data.md / flutter_state.md / flutter_ui.md
 │   │   ├── bug_fixer.md / ui_refiner.md
 │   │   ├── contract_verifier.md / figma_assets.md
-│   └── <space_name>/               # Project-scoped storage (isolated per project)
-│       ├── tasks/
-│       │   └── <platform>_context.json
-│       ├── <platform>_plan.md
-│       └── spoq/epics/active/<ticket_id>/
+│   │   └── linter.md / design_system.md / localization.md / ...
+│   ├── skills/                       ← 13 reusable skill definitions
+│   │   ├── agent-validation/SKILL.md
+│   │   ├── journal-tracker/SKILL.md
+│   │   └── ...
+│   ├── sessions.json
+│   └── jobs.json
 │
 └── src/
     └── ebdev/
-        ├── config.py               # Environment configuration loader
+        ├── config.py                 ← Environment configuration loader
         ├── core/
-        │   ├── exceptions.py       # Domain exceptions (GitServiceError, etc.)
-        │   ├── graph.py            # LangGraph StateGraph pipeline & routing logic
-        │   ├── nodes/              # Pipeline node steps
-        │   │   ├── prepare.py      # Workspace clone & dependency setup (per-platform, concurrent)
-        │   │   ├── orchestrate.py  # Strategy selection & SPOQ DAG generation
-        │   │   ├── plan.py         # Concurrent planner invocation
-        │   │   ├── generate.py     # Concurrent builder invocation
-        │   │   ├── validate.py     # Platform linter/test runner
-        │   │   ├── contract.py     # Cross-platform schema contract verifier
-        │   │   ├── repair.py       # Failure analysis and error-guided repair
-        │   │   ├── publish.py      # Branch commit and PR creation
-        │   │   └── finalize.py     # Job status persistence
-        │   └── spoq_utils.py       # SPOQ task parsing and wave resolution
+        │   ├── exceptions.py         ← Domain exceptions
+        │   ├── graph.py              ← LangGraph StateGraph pipeline & routing
+        │   ├── nodes/
+        │   │   ├── prepare.py        ← Workspace clone & dependency setup
+        │   │   ├── orchestrate.py    ← Strategy selection & SPOQ DAG generation
+        │   │   ├── plan.py           ← Concurrent planner invocation
+        │   │   ├── generate.py       ← Concurrent builder invocation
+        │   │   ├── validate.py       ← Platform linter/test runner
+        │   │   ├── contract.py       ← Cross-platform schema verifier
+        │   │   ├── repair.py         ← Failure analysis and repair
+        │   │   ├── publish.py        ← Branch commit and PR creation
+        │   │   └── finalize.py       ← Job status persistence
+        │   └── spoq_utils.py         ← Wave computation, task loading, epic lifecycle
         ├── models/
-        │   └── schemas.py          # JobContext, GraphState, SPOQTask, OrchestrationStrategy
-        ├── platforms/              # Platform strategy implementations
-        │   ├── base.py             # PlatformStrategy abstract interface
-        │   ├── flutter.py          # FlutterStrategy (pub get, build_runner, analyze)
-        │   └── api.py              # ApiStrategy (npm install, nest build, eslint)
+        │   └── schemas.py            ← JobContext, GraphState, SPOQTask, EpicTask, ...
+        ├── platforms/
+        │   ├── base.py               ← PlatformStrategy abstract interface
+        │   ├── flutter.py            ← FlutterStrategy
+        │   └── api.py                ← ApiStrategy
         └── services/
-            ├── db.py               # Job tracking & local JSON fallback engine
-            ├── flutter_cmd.py      # Headless Flutter CLI executor
-            ├── git.py              # Git repository, branch, and PR provider
-            ├── opencode.py         # SSE-streaming OpenCode client & session manager
-            ├── prompts.py          # Prompt builders with container path translation
-            └── starter.py          # Project skeleton bootstrapping
+            ├── db.py                 ← Job tracking & JSON fallback
+            ├── flutter_cmd.py        ← Headless Flutter CLI executor
+            ├── git.py                ← Git repository, branch, and PR provider
+            ├── opencode.py           ← SSE-streaming OpenCode client
+            ├── prompts.py            ← Prompt builders with path translation
+            └── starter.py            ← Project skeleton bootstrapping
 ```
-
-
-

@@ -9,8 +9,6 @@ services:
       - "4096:4096"
     environment:
       OPENAI_API_KEY: ${OPENAI_API_KEY}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
-      GOOGLE_GENERATIVE_AI_API_KEY: ${GOOGLE_GENERATIVE_AI_API_KEY}
       OPENCODE_API_KEY: ${OPENCODE_API_KEY}
     volumes:
       - ~/.local/share/opencode:/root/.local/share/opencode:rw

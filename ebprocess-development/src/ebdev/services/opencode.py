@@ -71,7 +71,7 @@ def extract_figma_url(description: str) -> str | None:
     return match.group(0) if match else None
 
 
-def extract_json_block(text: str, job_id: str) -> dict | None:
+def extract_json_block(text: str, task_id: str) -> dict | None:
     """
     Parse the final message text to extract the agent's JobResult JSON structure.
 
@@ -79,7 +79,7 @@ def extract_json_block(text: str, job_id: str) -> dict | None:
     ----------
     text : str
         The raw reply text from the agent.
-    job_id : str
+    task_id : str
         The job or ticket ID to match within the JSON.
 
     Returns
@@ -90,12 +90,27 @@ def extract_json_block(text: str, job_id: str) -> dict | None:
     if not text:
         return None
 
+    candidate = text.strip()
+
+    # Strategy 0: Accept a raw JSON object response first.
+    try:
+        data = json.loads(candidate)
+        if isinstance(data, dict) and (
+            data.get("task_id") == task_id
+            or data.get("ticket_id") == task_id
+            or data.get("jira_id") == task_id
+            or data.get("job_id") == task_id
+        ):
+            return data
+    except (json.JSONDecodeError, TypeError):
+        pass
+
     # Strategy 1: Look for standard markdown ```json blocks
     json_match = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
     if json_match:
         try:
             data = json.loads(json_match.group(1))
-            if isinstance(data, dict) and (data.get("job_id") == job_id or data.get("ticket_id") == job_id or data.get("jira_id") == job_id):
+            if isinstance(data, dict) and (data.get("task_id") == task_id or data.get("ticket_id") == task_id or data.get("jira_id") == task_id or data.get("job_id") == task_id):
                 return data
         except (json.JSONDecodeError, TypeError):
             pass
@@ -106,7 +121,7 @@ def extract_json_block(text: str, job_id: str) -> dict | None:
         end_idx = text.rfind("}")
         if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
             data = json.loads(text[start_idx:end_idx + 1])
-            if isinstance(data, dict) and (data.get("job_id") == job_id or data.get("ticket_id") == job_id or data.get("jira_id") == job_id):
+            if isinstance(data, dict) and (data.get("task_id") == task_id or data.get("ticket_id") == task_id or data.get("jira_id") == task_id or data.get("job_id") == task_id):
                 return data
     except (json.JSONDecodeError, TypeError):
         pass
@@ -313,12 +328,34 @@ class OpenCodeService:
             if url:
                 job_context.ticket.figma_url = url
 
-        tasks_dir = storage_dir / "tasks"
-        tasks_dir.mkdir(parents=True, exist_ok=True)
+        task_id_str = str(job_context.task_id) if getattr(job_context, "task_id", None) else "default"
+        if "-" in task_id_str:
+            parts = task_id_str.rsplit("-", 1)
+            if len(parts) == 2 and parts[1].isdigit():
+                phase_prefix = parts[0]
+                jira_id = parts[1]
+                task_id_dir = jira_id
+                file_prefix = f"{phase_prefix}_"
+            else:
+                task_id_dir = task_id_str
+                file_prefix = ""
+        else:
+            task_id_dir = task_id_str
+            file_prefix = ""
+            
+        if job_context.spoq_epic_dir:
+            # SPOQ mode: context is stored directly in the active epic directory
+            epic_dir = Path(job_context.spoq_epic_dir)
+            epic_dir.mkdir(parents=True, exist_ok=True)
+            filename = f"context_{platform}.json" if platform else "context.json"
+            ctx_file = epic_dir / filename
+        else:
+            # Fallback/Legacy mode
+            plans_dir = storage_dir / "plans" / task_id_dir
+            plans_dir.mkdir(parents=True, exist_ok=True)
+            filename = f"{file_prefix}context_{platform}.json" if platform else f"{file_prefix}context.json"
+            ctx_file = plans_dir / filename
 
-        prefix = f"{job_context.job_id}_" if getattr(job_context, "job_id", None) else ""
-        filename = f"{prefix}{platform}_context.json" if platform else f"{prefix}context.json"
-        ctx_file = tasks_dir / filename
         serializable_context = job_context.model_copy(
             update={
                 "repo_path": str(to_container_path(Path(job_context.repo_path))),
@@ -371,8 +408,8 @@ class OpenCodeService:
         # Project-scoped storage: .opencode/<space_name>/
         storage_dir = job_context.project_storage_dir(config.OPENCODE_PROJECT_DIR)
 
-        # Ensure tasks directory exists (plans live directly in storage_dir)
-        (storage_dir / "tasks").mkdir(parents=True, exist_ok=True)
+        # Ensure plans directory exists
+        (storage_dir / "plans").mkdir(parents=True, exist_ok=True)
 
         cls.write_context(job_context, storage_dir, platform=platform)
         prompt = prompts.build_prompt(job_context, storage_dir=storage_dir, session_id=session_id, platform=platform)
@@ -388,7 +425,7 @@ class OpenCodeService:
             except Exception as e:
                 logger.error("Failed to create agent execution session: %s", e)
                 return JobResult(
-                    job_id=job_context.ticket_id,
+                    task_id=job_context.ticket_id,
                     space_name=job_context.space_name,
                     ticket_id=job_context.ticket_id,
                     status="failed",
@@ -440,15 +477,46 @@ class OpenCodeService:
                 model=config.OPENCODE_MODEL,
             )
         except Exception as e:
-            logger.error("Failed to execute agent instructions on server: %s", e)
-            return JobResult(
-                job_id=job_context.ticket_id,
-                space_name=job_context.space_name,
-                ticket_id=job_context.ticket_id,
-                status="failed",
-                summary=f"OpenCode execution failed: {e}",
-                errors=[str(e)],
-            ), session_id
+            # Check if this is a 404 error indicating a stale/missing session
+            is_404 = False
+            if isinstance(e, httpx.HTTPStatusError) and e.response.status_code == 404:
+                is_404 = True
+            elif "404" in str(e) or "Not Found" in str(e):
+                is_404 = True
+
+            if is_404 and session_id:
+                logger.warning(
+                    "Session %s not found on server (404 status). Falling back to a new session...",
+                    session_id,
+                )
+                try:
+                    session_id = await client.create_session(title=f"Job {job_context.ticket_id}")
+                    msg_data = await client.send_prompt_message(
+                        session_id=session_id,
+                        agent=agent,
+                        prompt=prompt,
+                        model=config.OPENCODE_MODEL,
+                    )
+                except Exception as retry_err:
+                    logger.error("Failed to execute agent instructions on new session: %s", retry_err)
+                    return JobResult(
+                        task_id=job_context.ticket_id,
+                        space_name=job_context.space_name,
+                        ticket_id=job_context.ticket_id,
+                        status="failed",
+                        summary=f"OpenCode execution failed: {retry_err}",
+                        errors=[str(retry_err)],
+                    ), session_id
+            else:
+                logger.error("Failed to execute agent instructions on server: %s", e)
+                return JobResult(
+                    task_id=job_context.ticket_id,
+                    space_name=job_context.space_name,
+                    ticket_id=job_context.ticket_id,
+                    status="failed",
+                    summary=f"OpenCode execution failed: {e}",
+                    errors=[str(e)],
+                ), session_id
         finally:
             stream_task.cancel()
             await asyncio.gather(stream_task, return_exceptions=True)
@@ -466,7 +534,9 @@ class OpenCodeService:
                 # Assure base context elements are set in return payload
                 data.setdefault("space_name", job_context.space_name)
                 data.setdefault("ticket_id", job_context.ticket_id)
-                data.setdefault("job_id", job_context.ticket_id)
+                data.setdefault("task_id", job_context.ticket_id)
+                if "job_id" in data:
+                    data["task_id"] = data.pop("job_id")
                 data.setdefault("status", "success")
                 return JobResult(**data), session_id
             except (ValueError, ValidationError) as e:
@@ -474,7 +544,7 @@ class OpenCodeService:
 
         # Final fallback status
         return JobResult(
-            job_id=job_context.ticket_id,
+            task_id=job_context.ticket_id,
             space_name=job_context.space_name,
             ticket_id=job_context.ticket_id,
             status="success",

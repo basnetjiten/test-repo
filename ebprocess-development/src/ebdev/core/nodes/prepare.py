@@ -181,7 +181,11 @@ async def prepare_node(state: GraphState) -> GraphState:
 # ---------------------------------------------------------------------------
 def _sanitize_feature_name(name: str) -> str:
     """
-    Sanitize the feature name to a snake_case string.
+    Sanitize the feature name to a kebab-case string (noun-only).
+
+    Strips common generic verbs (create, add, build, implement, etc.) and
+    generic nouns (feature, screen, page, ui, flow) so the result is the
+    core noun/entity that describes the feature.
 
     Parameters
     ----------
@@ -191,14 +195,18 @@ def _sanitize_feature_name(name: str) -> str:
     Returns
     -------
     str
-        The sanitized snake_case feature name.
+        The sanitized kebab-case feature name (e.g. "enquiry", "user-profile").
     """
-    clean = re.sub(r"(?i)\b(feature|screen|page)\b", "", name).strip()
+    clean = re.sub(
+        r"(?i)\b(create|add|build|implement|update|fix|remove|delete|edit|manage|show|view|list|get|api|bug|feature|screen|page|ui|flow)\b",
+        "",
+        name,
+    ).strip()
     if not clean:
         clean = name
-    clean = re.sub(r'(?<!^)(?=[A-Z])', '_', clean).lower()
-    clean = re.sub(r'[^a-z0-9_]', '_', clean)
-    clean = re.sub(r'_+', '_', clean).strip('_')
+    clean = re.sub(r'(?<!^)(?=[A-Z])', '-', clean).lower()
+    clean = re.sub(r'[^a-z0-9-]', '-', clean)
+    clean = re.sub(r'-+', '-', clean).strip('-')
     return clean
 
 
@@ -248,7 +256,19 @@ async def _refactor_flutter_project(plat_path: Path, new_package_name: str) -> N
     new_content = content.replace(f"name: {old_package_name}", f"name: {new_package_name}", 1)
     pubspec_path.write_text(new_content, encoding="utf-8")
 
-    # 3. Recursively refactor all imports in .dart files under lib/ and test/
+    # 3. Update build.yaml ferry schema references (schema: old_name| -> schema: new_name|)
+    build_yaml_path = plat_path / "build.yaml"
+    if build_yaml_path.exists():
+        build_content = build_yaml_path.read_text(encoding="utf-8")
+        updated_build = build_content.replace(
+            f"schema: {old_package_name}|",
+            f"schema: {new_package_name}|"
+        )
+        if updated_build != build_content:
+            build_yaml_path.write_text(updated_build, encoding="utf-8")
+            logger.info("Updated build.yaml schema references from %r to %r", old_package_name, new_package_name)
+
+    # 4. Recursively refactor all imports in .dart files under lib/ and test/
     lib_dir = plat_path / "lib"
     test_dir = plat_path / "test"
 
