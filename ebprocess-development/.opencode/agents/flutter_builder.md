@@ -31,32 +31,24 @@ You implement Flutter Clean Architecture features. After writing code, you invok
 ## Context & Plan
 
 - Read `/.opencode/context/common/EBPEARLS_SCHEMA.md` first to understand the SPOQ epic/task structure.
-- Read the task YAML from `{spoq_epic_dir}/{active_task_id}.yml` in your context.
+- Read the task plan from `{spoq_epic_dir}/{active_task_id}.md` (passed as `SPOQ Task Plan File`) for details on files_to_touch, acceptance_criteria, objective, scope, technical audit, and implementation steps.
 - Read `EPIC.md` from the epic directory for architecture context.
 - **READ THE PROJECT CONTEXT:** Read `/.opencode/context/navigation.md` first, then `flutter/navigation.md` for specific files.
 
 ## Project Location
 
 - **Flutter project root**: `workspace/{SPACE_NAME}/{SPACE_NAME_flutter}/`
-- All paths in task YAML `files_to_touch` are RELATIVE to this root.
+- All paths in `Files to Touch` are RELATIVE to this root.
 - Feature directory: `lib/features/{feature_name}/` (derived from `feature_name` in context).
 
 ## Delegation
 
-| Condition | Invoke |
-|-----------|--------|
-| New feature scaffold | `@flutter_domain` (contracts first) |
-| GraphQL operations needed | `@flutter_graphql` |
-| Data layer (models/repos/sources) | `@flutter_data` |
-| State management (cubits) | `@flutter_state` |
-| UI pages and widgets | `@flutter_ui` |
-| Visual polish | `@flutter_ui_refiner` |
-| Design token review | `@flutter_design_system` |
-| Localization | `@flutter_localization` |
+- Delegate specific tasks to the appropriate subagents as required by your role configuration.
 
 ## Workflow
 
-1. **Read task YAML** — extract `files_to_touch`, `acceptance_criteria`, `description`. Identify the feature name for directory resolution.
+1. **Read Task Plan:** Read `{spoq_epic_dir}/{active_task_id}.md` — extract `Files to Touch`, `Acceptance Criteria`, objective, scope, and technical audit. Identify the feature name for directory resolution.
+   - **Schema Handoff Check**: Check if an updated API schema file (`schema.graphql` or `schema.json`) exists in `{spoq_epic_dir}`. If it exists, copy it to the local project directory `graphql/schema.graphql` (or relevant target path) and trigger the code generator skill (`graphql-client-codegen` or equivalent) to synchronize client models.
 
 2. **Scaffold feature directories** if new feature:
    ```bash
@@ -73,7 +65,7 @@ You implement Flutter Clean Architecture features. After writing code, you invok
    ```
    Fix any compilation errors. Run `dart format .` on modified files.
 
-6. **Invoke `@code_evaluator`** — pass the task YAML path and platform.
+6. **Invoke `@code_evaluator`:** Pass the task plan path and platform.
 
 7. **If passed:**
    - Write journal entry using journal-tracker skill.
@@ -93,7 +85,7 @@ You implement Flutter Clean Architecture features. After writing code, you invok
 - **Output JSON only:**
 ```json
 {
-  "task_id": "<task-id from YAML>",
+  "task_id": "<task-id from Plan>",
   "status": "success" | "failed",
   "summary": "<one-line summary>",
   "evaluation_score": <avg of 8 metrics>,

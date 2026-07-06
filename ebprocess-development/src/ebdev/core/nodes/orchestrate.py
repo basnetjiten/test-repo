@@ -26,14 +26,8 @@ from pydantic import ValidationError
 from ebdev.config import config
 from ebdev.core.constants import Agents
 from ebdev.core.nodes.common import send_progress
-from ebdev.core.spoq_map import (
-    load_map_manifest,
-    mark_epic_status,
-    materialize_spoq_map,
-    next_ready_epic,
-    save_map_manifest,
-)
-from ebdev.models.schemas import OrchestrationStrategy, SPOQMap, SPOQMapEpic
+from ebdev.core.spoq_map import build_epic_tasks, compute_epic_waves
+from ebdev.models.schemas import OrchestrationStrategy, SPOQMapEpic
 from ebdev.services.opencode import OpenCodeAPIClient
 from ebdev.services.prompts import build_orchestrator_prompt
 
@@ -71,7 +65,7 @@ async def orchestrate_node(state: GraphState) -> GraphState:
     GraphState
         The updated state with the orchestration strategy and, if applicable, the SPOQ epic task directory.
     """
-    state.last_node = "orchestrate"
+    state.last_node = "orchestrate_agent"
     await send_progress(state, "Orchestrating: Analyzing ticket scope, dependencies, and complexity...")
     
     ctx = state.context
@@ -191,18 +185,16 @@ async def orchestrate_node(state: GraphState) -> GraphState:
     logger.info("Mock Level:    %s", strategy.mocking_level)
     logger.info("Reasoning:     %s", strategy.reasoning)
 
-    # Generate SPOQ Map + Epic artifacts
-    spoq_epic_dir = None
-    spoq_map_dir = None
-    map_id = ctx.map_id
+    # Map-level tracking stored in GraphState, persisted via LangGraph checkpointing
+    derived_map_id = ticket_id
+    if str(ticket_id).startswith("Epic-"):
+        derived_map_id = ticket_id.replace("Epic-", "")
+    map_id = ctx.map_id or (ticket_id if str(ticket_id).startswith("Map-") else f"Map-{derived_map_id}")
+
+    # Build SPOQ task DAG in LangGraph state — no disk I/O
+    active_epic_id: str | None = None
+    active_epic_tasks: list = []
     if strategy.execution_mode == "spoq":
-        repo_root = Path(ctx.repo_path).absolute()
-        if repo_root.name.endswith("-services") or repo_root.name.endswith("_flutter"):
-            repo_root = repo_root.parent
-
-        project_spoq = repo_root / "spoq"
-        project_spoq.mkdir(parents=True, exist_ok=True)
-
         derived_epic_id = f"Epic-{ticket_id}" if not str(ticket_id).startswith("Epic-") else str(ticket_id)
         epic_specs = list(ctx.map_epics) if ctx.map_epics else [
             SPOQMapEpic(
@@ -218,95 +210,45 @@ async def orchestrate_node(state: GraphState) -> GraphState:
             )
         ]
 
-        derived_map_id = ticket_id
-        if str(ticket_id).startswith("Epic-"):
-            derived_map_id = ticket_id.replace("Epic-", "")
-        map_id = ctx.map_id or (ticket_id if str(ticket_id).startswith("Map-") else f"Map-{derived_map_id}")
-        program_map = SPOQMap(
-            id=map_id,
-            title=ticket_title or ctx.feature_name or map_id,
-            vision=ticket_desc or ticket_title or "Coordinate multiple epics through wave-based dispatch.",
-            status="planned",
-            epics=epic_specs,
-            success_criteria=(
-                list(ticket.acceptance_criteria)
-                if ticket and ticket.acceptance_criteria
-                else [criterion for epic in epic_specs for criterion in epic.acceptance_criteria]
-            ),
-            risk_assessment=[
-                "Cross-epic dependencies can block downstream waves if upstream validation slips.",
-                "Contracts shared across epics must stay aligned to avoid rework.",
-            ],
-        )
+        # Compute ready waves and select the first epic
+        waves = compute_epic_waves(epic_specs)
+        ready_wave = waves[0] if waves else []
+        active_epic_id = ready_wave[0] if ready_wave else epic_specs[0].id
 
-        map_dir, _epic_dirs = materialize_spoq_map(project_spoq, program_map)
-        program_map = load_map_manifest(map_dir)
+        active_epic_spec = next((e for e in epic_specs if e.id == active_epic_id), epic_specs[0])
 
-        active_epic = next_ready_epic(program_map) or program_map.epics[0]
-        if active_epic is None:
-            raise ValueError(f"SPOQ map {program_map.id} does not contain any epics.")
+        if active_epic_spec is None:
+            raise ValueError("SPOQ execution requires at least one epic.")
 
-        mark_epic_status(program_map, active_epic.id, "in-progress")
-        save_map_manifest(map_dir, program_map)
+        active_epic_spec.status = "in-progress"
+        active_epic_tasks = build_epic_tasks(active_epic_spec, mocking_level=strategy.mocking_level)
 
-        roadmap_path = project_spoq / "ROADMAP.md"
-        if not roadmap_path.exists():
-            roadmap_path.write_text(
-                "# SPOQ Epic Roadmap\n\n| Epic ID | Sprint | Title | Status | Depends On | Platforms |\n|---|---|---|---|---|---|\n",
-                encoding="utf-8",
-            )
+        logger.info("SPOQ dispatched epic %s with %d tasks (map %s)", active_epic_id, len(active_epic_tasks), map_id)
 
-        def _upsert_roadmap_entry(epic: SPOQMapEpic) -> None:
-            depends_on = ", ".join(epic.depends_on) if epic.depends_on else "—"
-            platforms_str = ", ".join(epic.platforms) if epic.platforms else "—"
-            row = f"| {epic.id} | {epic.sprint} | {epic.title} | {epic.status} | {depends_on} | {platforms_str} |"
-            content = roadmap_path.read_text(encoding="utf-8")
-            lines = content.splitlines()
-            for index, line in enumerate(lines):
-                if line.strip().startswith(f"| {epic.id} |") or line.strip().startswith(f"|{epic.id}|"):
-                    lines[index] = row
-                    roadmap_path.write_text("\n".join(lines), encoding="utf-8")
-                    return
-
-            insert_idx = len(lines)
-            for index, line in enumerate(lines):
-                if line.strip().startswith("## Status Meanings"):
-                    insert_idx = index
-                    break
-            lines.insert(insert_idx, row)
-            roadmap_path.write_text("\n".join(lines), encoding="utf-8")
-
-        for epic in program_map.epics:
-            epic.status = "planned"
-            _upsert_roadmap_entry(epic)
-
-        active_epic = next_ready_epic(program_map) or program_map.epics[0]
-        active_epic.status = "in-progress"
-        _upsert_roadmap_entry(active_epic)
-        from ebdev.core.spoq_utils import update_roadmap_status
-
-        update_roadmap_status(str(roadmap_path), active_epic.id, "in-progress")
-        save_map_manifest(map_dir, program_map)
-
-        from ebdev.core.spoq_map import EPICS_DIRNAME
-        spoq_map_dir = str(map_dir)
-        if EPICS_DIRNAME:
-            spoq_epic_dir = str(map_dir / EPICS_DIRNAME / active_epic.id)
-        else:
-            spoq_epic_dir = str(map_dir / active_epic.id)
-        logger.info("Generated SPOQ map in %s with active epic %s", spoq_map_dir, spoq_epic_dir)
+    shared_ctx_data = {
+        "ticket_id": ticket_id,
+        "mocking_level": strategy.mocking_level,
+        "offline_first": strategy.offline_first,
+        "complexity": strategy.complexity,
+        "api_schema": None,
+        "graphql_schema": None,
+        "endpoints": [],
+        "active_epic_id": active_epic_id,
+    }
 
     updated_ctx = ctx.model_copy(update={
         "mocking_level": strategy.mocking_level,
         "offline_first": strategy.offline_first,
-        "spoq_epic_dir": spoq_epic_dir,
-        "spoq_map_dir": spoq_map_dir,
-        "map_id": map_id
+        "spoq_epic_dir": active_epic_id,
+        "map_id": map_id,
+        "shared_context": shared_ctx_data
     })
 
     return state.model_copy(update={
-        "last_node": "orchestrate",
+        "last_node": "orchestrate_agent",
         "strategy": strategy,
         "context": updated_ctx,
-        "current_stage": 0
+        "current_stage": 0,
+        "spoq_tasks": active_epic_tasks,
+        "shared_context": shared_ctx_data
     })

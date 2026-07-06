@@ -14,7 +14,7 @@ Responsibilities
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from ebdev.config import config
 from pydantic import BaseModel, Field, model_validator
 
@@ -95,10 +95,8 @@ class JobContext(BaseModel):
     platform: str = _DEFAULT_PLATFORM
     platforms: List[str] = Field(default_factory=list)
     current_agent: str = "plan"
-    starter_types: Dict[str, str] = Field(default_factory=dict)
     
     # State tracking
-    spoq_epic_dir: Optional[str] = None
     active_task_id: Optional[str] = None
     starter_kit_url: Optional[str] = None
     # Repository management
@@ -133,11 +131,11 @@ class JobContext(BaseModel):
     mocking_level: str = "live"
     offline_first: bool = False
 
-    # SPOQ execution state
-    spoq_epic_dir: Optional[str] = None
+    # SPOQ execution state (persisted via LangGraph checkpointing)
+    spoq_epic_dir: Optional[str] = None  # active epic identifier
     map_id: Optional[str] = None
-    spoq_map_dir: Optional[str] = None
     map_epics: List[SPOQMapEpic] = Field(default_factory=list, exclude=True)
+    shared_context: Dict[str, Any] = Field(default_factory=dict)
 
     # Progress tracking (excluded from serialization)
     repair_iteration: int = Field(0, exclude=True)
@@ -465,7 +463,16 @@ class GraphState(BaseModel):
     failed_platforms: Dict[str, bool] = Field(default_factory=dict)
     opencode_session_ids: Dict[str, str] = Field(default_factory=dict)
 
+    # LangGraph-native SPOQ task tracking
+    spoq_tasks: List[SPOQTask] = Field(default_factory=list)
+    shared_context: Dict[str, Any] = Field(default_factory=dict)
+
     @property
     def is_spoq(self) -> bool:
         """Return True when the active execution mode is SPOQ."""
         return self.strategy is not None and self.strategy.execution_mode == "spoq"
+
+
+# Rebuild models to resolve forward references
+JobContext.model_rebuild()
+GraphState.model_rebuild()

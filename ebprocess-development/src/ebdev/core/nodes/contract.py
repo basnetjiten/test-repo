@@ -43,7 +43,7 @@ async def contract_node(state: GraphState) -> GraphState:
     GraphState
         The updated state with the contract verification status recorded.
     """
-    state.last_node = "contract"
+    state.last_node = "contract_agent"
     ctx = state.context
     platforms = ctx.platforms
 
@@ -59,4 +59,4 @@ async def contract_node(state: GraphState) -> GraphState:
     else:
         logger.info("Single platform %s running. Skipping contract integration checks.", platforms)
 
-    return state
+    return state.model_copy(update={"last_node": "contract_agent"})

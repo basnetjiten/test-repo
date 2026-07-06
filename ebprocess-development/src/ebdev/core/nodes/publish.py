@@ -63,7 +63,7 @@ async def publish_node(state: GraphState) -> GraphState:
     GraphState
         The updated state containing PR URL details.
     """
-    state.last_node = "publish"
+    state.last_node = "publish_agent"
     await send_progress(state, "Publishing changes and creating Pull Requests concurrently...")
     
     ctx = state.context
@@ -156,14 +156,14 @@ async def publish_node(state: GraphState) -> GraphState:
         #         logger.info("Cleanup: Removed plan %s", plan_file)
 
         return state.model_copy(update={
-            "last_node": "publish",
+            "last_node": "publish_agent",
             "result": new_result,
             "pull_request_url": primary_pr
         })
 
     except Exception as e:  # pylint: disable=broad-exception-caught
         logger.error("CRITICAL ERROR in publishing phase: %s", e)
-        return state.model_copy(update={"last_node": "publish"})
+        return state.model_copy(update={"last_node": "publish_agent"})
 
 
 # ---------------------------------------------------------------------------

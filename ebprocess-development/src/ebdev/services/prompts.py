@@ -108,7 +108,7 @@ def _legacy_task_paths(storage_dir: Path, task_id: str | int | None, platform: s
         task_id_dir = task_id_str
         file_prefix = ""
 
-    plans_dir = storage_dir / "plans" / task_id_dir
+    plans_dir = storage_dir / task_id_dir
     return (
         plans_dir / f"{file_prefix}context_{platform}.json",
         plans_dir / f"{file_prefix}plan_{platform}.md",
@@ -123,22 +123,22 @@ def agent_instructions(job_context: JobContext, storage_dir: Path, platform: str
     storage_dir_container = to_container_path(storage_dir)
     spoq_dir: str | None = getattr(job_context, "spoq_epic_dir", None)
     context_path: Path | None = None
-    yaml_path: Path | None = None
+    plan_path: Path | None = None
 
     if spoq_dir is not None:
-        # SPOQ mode: context is inside active epic directory
-        epic_dir = to_container_path(Path(spoq_dir))
+        # SPOQ mode: context and plan are inside active epic directory
+        epic_dir = storage_dir_container / spoq_dir
         context_path = epic_dir / f"context_{plat}.json"
-        yaml_path = epic_dir / f"{job_context.active_task_id}.yml"
+        plan_path = epic_dir / f"{job_context.active_task_id}.md"
 
     # Evaluator instructions
     if agent == "code_evaluator" or "evaluator" in agent:
         if spoq_dir is not None:
-            assert yaml_path is not None
+            assert plan_path is not None
             return f"""<{Prompts.INSTRUCTIONS_TAG}>
 - GOAL: Score the completed code for task {job_context.active_task_id} against the 10 quality metrics: Syntactic Correctness (SC), Test Existence (TE), Test Pass Rate (TP), Requirements Fidelity (RF), SOLID Adherence (SA), Security (SE), Error Handling (EH), Scalability (SL), Code Clarity (CC), and Completeness (CO).
-- REQUIREMENT: Read the task YAML at {yaml_path}.
-- CRITICAL REQUIREMENT: Evaluate the changes in the files listed in `files_to_touch` of that YAML file.
+- REQUIREMENT: Read the task plan Markdown file at {plan_path}.
+- CRITICAL REQUIREMENT: Evaluate the changes in the files listed in the Technical Audit table of that plan file.
 - SCORING: Use the `agent-validation` skill to grade each metric (0-100). Calculate the average and identify the minimum score.
 - DECISION: Pass the task ONLY if avg(M₁…M₁₀) ≥ 95 AND min(M₁…M₁₀) ≥ 80.
 - JOURNAL: You MUST write your detailed evaluation journal to the `journals/` folder in the epic directory.
@@ -154,24 +154,25 @@ def agent_instructions(job_context: JobContext, storage_dir: Path, platform: str
         skills_list = PLATFORM_SKILLS.get(plat, ["api-integration/SKILL.md"])
         skills_str = "\n".join([f"  - For {plat.upper()}: " + ", ".join([f"read `/.opencode/skills/{s}`" for s in skills_list])])
         if spoq_dir is not None:
-            assert yaml_path is not None
-            return f"""<{Prompts.INSTRUCTIONS_TAG}>
-{Prompts.PHASE_PLANNING}
-- GOAL: Enrich the task YAML at {yaml_path} with a detailed description, files_to_touch, and acceptance_criteria based on your codebase audit.
-- REQUIREMENT: Use the `edit` tool to update the `description`, `files_to_touch`, and `acceptance_criteria` fields in the YAML file at {yaml_path}. The enriched YAML IS the plan — do NOT create a separate plan file.
-- CRITICAL REQUIREMENT: In your very first step, you MUST use the `read` tool to inspect the guidelines inside the `/.opencode/skills/` directory for your platform:
-{skills_str}
-  Your plan MUST strictly adopt the exact folder paths, base classes, and structural layers defined in these skills. If your plan fails to use these paths and patterns, you have FAILED.
-- Enrichment Reference: Populate `description` with a Markdown string containing Objective, Technical Audit table, Implementation Steps, and Verification. List every file the builder will touch in `files_to_touch`. List verifiable checkboxes in `acceptance_criteria`.
-</{Prompts.INSTRUCTIONS_TAG}>"""
-        else:
-            context_path, plan_path = _legacy_task_paths(storage_dir_container, job_context.task_id, plat)
-            assert context_path is not None
             assert plan_path is not None
             return f"""<{Prompts.INSTRUCTIONS_TAG}>
 {Prompts.PHASE_PLANNING}
+- GOAL: Create a comprehensive implementation plan for task {job_context.active_task_id} based on your codebase audit.
+- REQUIREMENT: You MUST save the plan using the `write` tool as a Markdown file at {plan_path}.
+- CRITICAL CONSTRAINT: Do NOT print the plan content in your chat response. Your chat response must contain ONLY the final JSON object. You MUST write the plan to the file using the `write` tool first, then output the final JSON object.
+- CRITICAL REQUIREMENT: In your very first step, you MUST use the `read` tool to inspect the guidelines inside the `/.opencode/skills/` directory for your platform:
+{skills_str}
+  Your plan MUST strictly adopt the exact folder paths, base classes, and structural layers defined in these skills. If your plan fails to use these paths and patterns, you have FAILED.
+- Required Plan Shape: Adopt the exact heading styles, audit tables, and layout sections (Objective, Scope, Technical Audit table, Implementation Steps, Verification) defined in your system instruction. Write every file you will touch in the Technical Audit table.
+</{Prompts.INSTRUCTIONS_TAG}>"""
+        else:
+            context_path, legacy_plan_path = _legacy_task_paths(storage_dir_container, job_context.task_id, plat)
+            assert context_path is not None
+            assert legacy_plan_path is not None
+            return f"""<{Prompts.INSTRUCTIONS_TAG}>
+{Prompts.PHASE_PLANNING}
 - GOAL: Create a comprehensive implementation plan based on the requirements in {context_path}.
-- REQUIREMENT: You MUST save the plan using the `write` tool to the path specified under `Implementation Plan` ({plan_path}).
+- REQUIREMENT: You MUST save the plan using the `write` tool to the path specified under `Implementation Plan` ({legacy_plan_path}).
  - CRITICAL CONSTRAINT: Do NOT print the plan content in your chat response. Your chat response must contain ONLY the final JSON object. You MUST write the plan to the file using the `write` tool first, then output the final JSON object.
 - CRITICAL REQUIREMENT: In your very first step, you MUST use the `read` tool to inspect the guidelines inside the `/.opencode/skills/` directory for your platform:
 {skills_str}
@@ -225,13 +226,13 @@ def agent_instructions(job_context: JobContext, storage_dir: Path, platform: str
 
         if spoq_dir is not None:
             assert context_path is not None
-            assert yaml_path is not None
-            plan_source = f"Read the task YAML at {yaml_path} — the `description` field contains the implementation plan. If that YAML does not have a non-empty `description`, immediately output: {{\"status\": \"error\", \"reason\": \"Task YAML at {yaml_path} has no enriched description\"}} and stop."
-        else:
-            context_path, plan_path = _legacy_task_paths(storage_dir_container, job_context.task_id, plat)
-            assert context_path is not None
             assert plan_path is not None
-            plan_source = f"Implement the plan found at {plan_path}. If that plan file does not exist, immediately output: {{\"status\": \"error\", \"reason\": \"{ErrorMessages.PLAN_MISSING.format(plan_path=plan_path)}\"}} and stop."
+            plan_source = f"Implement the plan found at {plan_path}. If that plan file does not exist, immediately output: {{\\\"status\\\": \\\"error\\\", \\\"reason\\\": \\\"Plan file {plan_path} is missing.\\\"}} and stop."
+        else:
+            context_path, legacy_plan_path = _legacy_task_paths(storage_dir_container, job_context.task_id, plat)
+            assert context_path is not None
+            assert legacy_plan_path is not None
+            plan_source = f"Implement the plan found at {legacy_plan_path}. If that plan file does not exist, immediately output: {{\\\"status\\\": \\\"error\\\", \\\"reason\\\": \\\"{ErrorMessages.PLAN_MISSING.format(plan_path=legacy_plan_path)}\\\"}} and stop."
 
         return f"""<{Prompts.INSTRUCTIONS_TAG}>
 {Prompts.PHASE_IMPLEMENTATION}
@@ -268,9 +269,9 @@ def build_prompt(
 
     # Resolve context file & plan file strings based on SPOQ execution mode
     if spoq_epic_dir is not None:
-        epic_dir = to_container_path(Path(spoq_epic_dir))
+        epic_dir = storage_dir_container / spoq_epic_dir
         reqs_file_str = f"Requirements File:    {epic_dir}/context_{plat}.json"
-        plan_file_str = f"SPOQ Task YAML File:  {epic_dir}/{job_context.active_task_id}.yml"
+        plan_file_str = f"SPOQ Task Plan File:  {epic_dir}/{job_context.active_task_id}.md"
         map_file_str = None
         if spoq_map_dir is not None:
             map_file_str = f"SPOQ Map File:        {to_container_path(Path(spoq_map_dir))}/MAP.md"

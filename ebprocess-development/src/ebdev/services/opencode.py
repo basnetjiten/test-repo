@@ -344,14 +344,15 @@ class OpenCodeService:
             file_prefix = ""
             
         if job_context.spoq_epic_dir:
-            # SPOQ mode: context is stored directly in the active epic directory
-            epic_dir = Path(job_context.spoq_epic_dir)
+            # SPOQ mode: store context in project storage under an epic-specific subdirectory
+            epic_safe = job_context.spoq_epic_dir.replace("/", "_").replace("\\", "_")
+            epic_dir = storage_dir / epic_safe
             epic_dir.mkdir(parents=True, exist_ok=True)
             filename = f"context_{platform}.json" if platform else "context.json"
             ctx_file = epic_dir / filename
         else:
             # Fallback/Legacy mode
-            plans_dir = storage_dir / "plans" / task_id_dir
+            plans_dir = storage_dir / task_id_dir
             plans_dir.mkdir(parents=True, exist_ok=True)
             filename = f"{file_prefix}context_{platform}.json" if platform else f"{file_prefix}context.json"
             ctx_file = plans_dir / filename
@@ -408,9 +409,6 @@ class OpenCodeService:
         # Project-scoped storage: .opencode/<space_name>/
         storage_dir = job_context.project_storage_dir(config.OPENCODE_PROJECT_DIR)
 
-        # Ensure plans directory exists
-        (storage_dir / "plans").mkdir(parents=True, exist_ok=True)
-
         cls.write_context(job_context, storage_dir, platform=platform)
         prompt = prompts.build_prompt(job_context, storage_dir=storage_dir, session_id=session_id, platform=platform)
 
@@ -436,7 +434,7 @@ class OpenCodeService:
         # 2. Concurrently read Server-Sent Events (SSE) to print deltas
         def _handle_delta(event: dict[str, Any]) -> None:
             if delta := event.get("properties", {}).get("delta"):
-                print(delta, end="", flush=True)
+                logger.debug(delta)
 
         def _handle_step_start(event: dict[str, Any]) -> None:
             part_id = event.get("part", {}).get("id", "Unknown")
@@ -542,13 +540,14 @@ class OpenCodeService:
             except (ValueError, ValidationError) as e:
                 logger.warning("Metadata format parsing warnings: %s", e)
 
-        # Final fallback status
+        # Final fallback status - if we couldn't parse a structured JSON block, it is a failure
         return JobResult(
             task_id=job_context.ticket_id,
             space_name=job_context.space_name,
             ticket_id=job_context.ticket_id,
-            status="success",
-            summary="Operation completed successfully.",
+            status="failed",
+            summary="Agent failed to return a valid status JSON metadata block.",
+            errors=["No valid JSON metadata block extracted from agent reply text."],
         ), session_id
 
     @classmethod

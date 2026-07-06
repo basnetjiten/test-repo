@@ -1,5 +1,5 @@
 {
-  "id":44445,
+  "id": 44445,
   "space_name": "AgentSwipe",
   "ticket_id": "Epic-44445",
   "title": "Project Configurations",
@@ -35,22 +35,6 @@
           "platform": {
             "id": 3,
             "name": "api"
-          }
-        }
-      ]
-    },
-    {
-      "id": 41863,
-      "name": "list all logged in user and apply search",
-      "status": "todo",
-      "hours": [
-        {
-          "estimatedHour": 1.0,
-          "taskId": 41863,
-          "platformId": 1,
-          "platform": {
-            "id": 1,
-            "name": "flutter"
           }
         }
       ]

@@ -7,8 +7,6 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import yaml
-
 # Ensure src directory is in python path for local execution of scratch scripts
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -81,33 +79,14 @@ async def run_test():
             progress_callback(f"Running mock actions for {platform}")
             
         if "plan" in agent:
+            # SPOQ mode: tasks enriched in GraphState only (no YAML files)
             if ctx.spoq_epic_dir and ctx.active_task_id:
-                yaml_path = Path(ctx.spoq_epic_dir) / f"{ctx.active_task_id}.yml"
-                yaml_path.write_text(
-                    yaml.safe_dump(
-                        {
-                            "id": ctx.active_task_id,
-                            "title": f"Plan for {platform}",
-                            "epic": ctx.ticket_id,
-                            "description": (
-                                f"## Objective\nCreate a concrete implementation plan for {platform}.\n\n"
-                                "## Steps\n1. Audit the codebase.\n2. Implement the required changes.\n3. Validate the result.\n"
-                            ),
-                            "status": "pending",
-                            "phase": 0,
-                            "dependencies": [],
-                            "skills_required": [platform],
-                            "files_to_touch": [f"src/{platform}/placeholder.txt"],
-                            "outputs": [f"{platform} output"],
-                            "acceptance_criteria": ["Plan is detailed enough for execution."],
-                        },
-                        sort_keys=False,
-                    ),
-                    encoding="utf-8",
-                )
+                pass  # Enrichment handled by plan_node state updates
             else:
                 storage = ctx.project_storage_dir(config.OPENCODE_PROJECT_DIR)
-                plan_file = storage / f"{platform}_plan.md"
+                plan_dir = storage / (str(ctx.task_id) if getattr(ctx, "task_id", None) else "default")
+                plan_dir.mkdir(parents=True, exist_ok=True)
+                plan_file = plan_dir / f"plan_{platform}.md"
                 plan_content = (
                     f"# Implementation Plan - {platform.upper()}\n\n"
                     "## Scope\n"
@@ -198,7 +177,8 @@ async def run_test():
         from ebdev.core.graph import graph
 
         print("Invoking Graph...")
-        final_state = await graph.ainvoke(initial_state)
+        thread_config = {"configurable": {"thread_id": "test-thread-epic-101"}}
+        final_state = await graph.ainvoke(initial_state, config=thread_config)
         
         print("\n=== CONCURRENT RUN COMPLETE ===")
         print(f"Final State done:   {final_state.get('done')}")

@@ -48,7 +48,7 @@ async def finalize_node(state: GraphState) -> GraphState:
     GraphState
         The updated state with the finalized job result and done flag set.
     """
-    state.last_node = "finalize"
+    state.last_node = "finalize_agent"
     start_time = time.time()
     ctx = state.context
     callback_url = ctx.n8n_callback_url
@@ -94,7 +94,7 @@ async def finalize_node(state: GraphState) -> GraphState:
     logger.info("Job %s finished with status: %s.", ctx.ticket_id, status)
 
     return state.model_copy(update={
-        "last_node": "finalize",
+        "last_node": "finalize_agent",
         "result": result,
         "done": True,
     })

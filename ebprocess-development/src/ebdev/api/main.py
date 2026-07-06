@@ -3,6 +3,7 @@ import sys
 import uuid
 from typing import Dict, List
 
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
@@ -24,7 +25,17 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="EBProcess Pipeline API")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Initialize Postgres database tables
+    try:
+        from ebdev.services.db import init_db
+        await init_db()
+    except Exception as e:
+        logger.error("Error during startup database initialization: %s", e)
+    yield
+
+app = FastAPI(title="EBProcess Pipeline API", lifespan=lifespan)
 
 class ExecutePipelineRequest(BaseModel):
     """
@@ -79,7 +90,8 @@ async def execute_pipeline(request: ExecutePipelineRequest):
 
     try:
         logger.info("Invoking pipeline for %s", request.ticket_id)
-        final_state = await graph.ainvoke(initial_state)
+        config = {"configurable": {"thread_id": f"thread-{request.ticket_id}"}}
+        final_state = await graph.ainvoke(initial_state, config=config)
         
         result = final_state.get("result")
         if result:

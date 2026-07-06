@@ -69,6 +69,36 @@ def _save_json(path: Path, data: dict) -> None:
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+async def init_db() -> None:
+    """Initialize Postgres database tables if they do not exist."""
+    if not config.POSTGRES_URL:
+        return
+    try:
+        import asyncpg
+        conn = await asyncpg.connect(config.POSTGRES_URL)
+        try:
+            await conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS jobs (
+                    job_id VARCHAR(255) PRIMARY KEY,
+                    status VARCHAR(50),
+                    summary TEXT,
+                    errors TEXT[],
+                    warnings TEXT[],
+                    opencode_session_id VARCHAR(255),
+                    jira_id VARCHAR(255),
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW()
+                );
+                """
+            )
+            logger.info("Postgres database tables initialized.")
+        finally:
+            await conn.close()
+    except Exception as e:
+        logger.error("Failed to initialize database tables: %s", e)
+
+
 async def update_job_status(result: JobResult) -> bool:
     """
     Update job status in Postgres or fallback JSON.

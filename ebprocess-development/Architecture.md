@@ -6,9 +6,9 @@ This document provides a comprehensive view of the **ebprocess-development** sys
 
 ## 1. High-Level System Architecture
 
-The core of `ebprocess-development` is a **stateful orchestration graph** built on **LangGraph**. The pipeline coordinates epic creation, task decomposition, wave-based dispatch, source code generation, code validation (8-metric scoring), contract verification, and publishing.
+The core of `ebprocess-development` is a **stateful orchestration graph** built on **LangGraph**. The pipeline coordinates workspace setup, epic planning, wave-based task execution, code validation (10-metric scoring), contract verification, and publishing.
 
-Multiple independent projects run **concurrently** because all per-project state — epics, tasks, journals — is **isolated by `space_name`** inside the `spoq/` directory.
+Multiple independent projects run **concurrently** because all per-project state — epics, tasks, journals — is **isolated by `space_name`** inside the `.ebpearls/` directory.
 
 ### LangGraph Stateful Pipeline
 
@@ -55,55 +55,44 @@ graph TD
     style Finalize fill:#0F172A,stroke:#38BDF8,stroke-width:2px,color:#fff
 ```
 
-Each `generate_node` invocation dispatches a builder agent, which writes code then invokes the **`@code_evaluator`** — an independent reviewer that scores the output against 8 quality metrics before marking the task complete.
+> [!NOTE]
+> **Dual-System Architecture**: The system consists of two separate components running side-by-side:
+> 1. **Python LangGraph Pipeline**: A stateful orchestration host (listening on port `8001`). It manages job parameters, branches, code compilation triggers, and coordinates the wave-based topological dispatch loops.
+> 2. **OpenCode Headless Server**: A separate agent execution engine (running on port `4096`). The pipeline never executes agent LLM/tool loops directly; it instead delegates planning, building, and evaluation steps to OpenCode via REST API calls.
+
+Each `generate_node` invocation dispatches a builder agent, which writes code and then triggers the validation node. The **`@code_evaluator`** agent independently scores the output against 10 quality metrics before marking the task complete.
 
 ---
 
 ## 2. Multi-Project Workspace Isolation
 
-Each project is identified by a **`space_name`** (e.g. `"ebsprinter"`, `"ebprocess"`). All pipeline nodes resolve storage paths through `JobContext.project_storage_dir()`, ensuring **zero cross-project collisions**.
+Each project is identified by a **`space_name`** (e.g. `"ebsprinter"`, `"ebprocess"`, `"AgentSwipe"`). All pipeline nodes resolve storage paths through `JobContext.project_storage_dir()`, ensuring **zero cross-project collisions**.
 
 ### Directory Layout
 
 ```text
 workspace/                               ← runtime project checkouts
-└── {space_name}/                        ← e.g. ebmobileapp
-    ├── spoq/                            ← SPOQ root
+└── {space_name}/                        ← e.g. AgentSwipe
+    ├── .ebpearls/                       ← Isolated runtime storage
     │   ├── ROADMAP.md                   ← Cross-epic registry
     │   ├── Epic-{id}/                   ← e.g. Epic-44445
     │   │   ├── EPIC.md                  ← Goal, architecture, DAG, wave assignments
-    │   │   ├── {task-name}.yml          ← Task YAML (named by ticket name)
+    │   │   ├── {task-name}.md           ← Task plan Markdown (e.g. api-impl-41831.md)
     │   │   ├── context_api.json         ← Platform context (generated)
     │   │   ├── context_flutter.json     ← Platform context (generated)
     │   │   └── journals/                ← Agent session journals
-    │   │       ├── 2026-07-05_development_builder.md
+    │   │       ├── 2026-07-06_development_builder.md
     │   │       └── JOURNAL.md           ← Consolidated
     │   └── Epic-{id}/                   ← Multiple epics can coexist
     │       └── ...
     │
-    ├── .ebpearls/                       ← Legacy task storage (migrating to spoq/)
-    │   └── ...
-    │
     ├── {space_name}-services/           ← API platform (NestJS)
     └── {space_name}_flutter/            ← Flutter platform
-
-.opencode/                               ← Agent state and profiles (gitignored)
-├── agents/                              ← Agent instruction files
-│   ├── multi_agent_orchestrator.md
-│   ├── code_evaluator.md                ← Independent reviewer
-│   ├── api_builder.md / flutter_builder.md
-│   └── ...
-├── skills/                              ← Reusable skill definitions
-│   ├── agent-validation/SKILL.md        ← 8-metric code validation rubric
-│   ├── journal-tracker/SKILL.md         ← Session journal format
-│   └── ...
-├── sessions.json
-└── jobs.json
 ```
 
 ### Isolation Rule
 
-`JobContext.project_storage_dir()` resolves to `<workspace_dir>/<space_name>/.ebpearls/`. All SPOQ data uses paths relative to the workspace project root. No two projects share state.
+`JobContext.project_storage_dir()` resolves to `<workspace_dir>/<space_name>/.ebpearls/`. All SPOQ data uses paths relative to this isolated subdirectory. No two projects share state.
 
 ---
 
@@ -113,10 +102,16 @@ The `orchestrate_node` parses ticket properties to choose an `OrchestrationStrat
 
 ### Decision Process
 
-1. **LLM Evaluation**: Dispatches to `multi_agent_orchestrator` agent to evaluate complexity and return a structured `OrchestrationStrategy` schema.
+1. **LLM Evaluation**: Dispatches a single-turn prompt to the `multi_agent_orchestrator` agent to evaluate ticket complexity and return a structured `OrchestrationStrategy` schema.
 2. **Rule-Based Heuristic Fallback**: If the LLM call fails, applies regex keyword classification:
    - **Offline-First Detection**: Scans for `offline`, `local storage`, `sqlite`, `hive`, `drift`, `isar`, `cache`.
    - **UI/UX-Only Detection**: Presentation keywords (`style`, `screen`, `widget`) with no backend elements (`api`, `db`, `migration`).
+
+> [!IMPORTANT]
+> **Dual Orchestration & Payload Bypass**:
+> - The `orchestrate_node` dispatches to OpenCode's `multi_agent_orchestrator` only for the initial complexity and execution mode classification (using a single-turn prompt), not to manage the step-by-step SPOQ lifecycle.
+> - The actual wave topological sorting, dispatch scheduling, retry/repair counts, and node transitions are driven entirely by the Python LangGraph code.
+> - If the incoming request payload contains a predefined list of tasks (`tasks[]` is present, e.g. in `dummy_request.json`), the LLM orchestrator classification is completely bypassed. The execution mode is automatically set to `spoq`.
 
 ### `OrchestrationStrategy` Schema
 
@@ -142,133 +137,93 @@ The `orchestrate_node` parses ticket properties to choose an `OrchestrationStrat
 
 ## 4. Specialist Orchestrated Queuing (SPOQ)
 
-SPOQ is a published methodology (arXiv:2606.03115v1) for multi-agent software engineering. It combines wave-based topological dispatch, dual validation gates, and human-as-agent integration. Our implementation adopts the four-stage pipeline, 8-code-metric validation gate, journal tracking with confidence scores, and epic lifecycle management.
+SPOQ is a methodology (arXiv:2606.03115v1) for multi-agent software engineering. It combines wave-based topological dispatch, dual validation gates, and human-as-agent integration. Our implementation adopts the four-stage pipeline, 10-code-metric validation gate, journal tracking with confidence scores, and epic lifecycle management.
 
 ### Four-Stage Pipeline
 
 ```mermaid
 graph LR
     subgraph "Stage 1: Epic Planning"
-        A["Orchestrator: Create skeleton YAMLs"] -->|Dispatch planners| B["@api_planner / @flutter_planner: Enrich YAMLs"]
+        A["Orchestrator: Create context JSONs"] -->|Dispatch planners| B["@api_planner / @flutter_planner: Write plans"]
     end
     subgraph "Stage 2: Wave Execution"
-        B["Orchestrator: Compute Waves"] -->|Topological Sort| C
+        B -->|Topological Sort| C["Orchestrator: Compute waves & dispatch builders"]
     end
     subgraph "Stage 3: Code Validation"
-        C["Builder + @code_evaluator"] -->|avg ≥ 95, min ≥ 80| D
+        C -->|avg ≥ 95, min ≥ 80| D["Builder + @code_evaluator"]
     end
     subgraph "Stage 4: Epic Completion"
-        D["Orchestrator: Move to complete/"]
+        D --> E["Orchestrator: Commit & squash-merge"]
     end
 
     style A fill:#1E293B,stroke:#0EA5E9,stroke-width:2px,color:#fff
     style B fill:#1E293B,stroke:#0EA5E9,stroke-width:2px,color:#fff
     style C fill:#1E293B,stroke:#10B981,stroke-width:2px,color:#fff
-    style D fill:#1E293B,stroke:#0EA5E9,stroke-width:2px,color:#fff
+    style D fill:#1E293B,stroke:#10B981,stroke-width:2px,color:#fff
+    style E fill:#1E293B,stroke:#0EA5E9,stroke-width:2px,color:#fff
 ```
 
 ### Epic Directory Structure
 
-Each epic occupies its own directory under `spoq/`:
+Each epic occupies its own directory under `.ebpearls/`:
 
 ```
-spoq/
+.ebpearls/
   ROADMAP.md                    ← Centralized epic registry (status: planned → in-progress → done)
   Epic-{id}/                    ← e.g. Epic-44445 (one directory per epic)
     EPIC.md                     ← Goal, architecture, dependency DAG, wave assignments
-    {task-name}.yml             ← Task YAML (named by ticket name, e.g. contract-41831.yml)
+    {task-name}.md              ← Task plan Markdown (e.g. api-impl-41831.md)
     context_api.json            ← Platform context (generated by orchestrator)
     context_flutter.json
     journals/                   ← Agent session journals
 ```
 
-### Task YAML Schema
+### Concrete Task DAG Example (from dummy_request.json)
 
-Each task file follows a standardized schema (SPOQ Definition 5.1) with three field categories:
-
-**Identity Fields:**
-```yaml
-id: 01-create-schema
-title: Create Enquiry Mongo Schema
-epic: example-enquiry
-```
-
-**Execution Control Fields:**
-```yaml
-status: pending              # pending | in_progress | completed | blocked
-priority: high
-phase: 0                     # Wave assignment (0 = no dependencies)
-estimate:                    # PERT three-point estimate
-  optimistic: 30m
-  realistic: 1h
-  pessimistic: 2h
-dependencies: []             # Task IDs that must complete first
-skills_required:
-  - api-schema
-  - mongoose
-```
-
-**Deliverable & Verification Fields:**
-```yaml
-files_to_touch:
-  - libs/data-access/src/enquiry/enquiry.schema.ts
-outputs:
-  - "Enquiry Mongoose schema with timestamps"
-acceptance_criteria:
-  - "[ ] TypeScript compiles without errors"
-  - "[ ] Schema has all required fields"
-description: |
-  ## Objective
-  Create the Enquiry MongoDB schema.
-  ## Steps
-  1. Create schema file...
-```
-
-### Wave-Based Topological Dispatch
-
-Wave assignment is computed via topological sort (Kahn's algorithm). Tasks in the same phase have no dependencies on each other and execute concurrently.
+For ticket `Epic-44445` containing platform configurations, the tasks are decomposed topologically into distinct waves:
 
 ```mermaid
 graph TD
-    subgraph "Wave 0: Foundation"
-        T1["01-create-schema"]
+    subgraph "Wave 0 (Phase 0): API Contracts"
+        T1["contract-41831<br>(Define API Contracts)"]
     end
-    subgraph "Wave 1: Parallel API"
-        T2["02-create-mutation"]
-        T3["03-create-service"]
+    subgraph "Wave 1 (Phase 1): Platform Implementations"
+        T2["api-impl-41831<br>(NestJS Backend logic)"]
+        T3["flutter-impl-41831<br>(Flutter UI & Logic)"]
+        T4["flutter-impl-41863<br>(User List Logic)"]
     end
-    subgraph "Wave 2: Resolver"
-        T4["04-create-resolver"]
-    end
-    subgraph "Wave 3: Flutter Domain"
-        T5["05-create-flutter-domain"]
+    subgraph "Wave 2 (Phase 2): End-to-End Integration"
+        T5["integration-41831<br>(Form submission validation)"]
+        T6["integration-41863<br>(User List search checks)"]
     end
 
     T1 --> T2
     T1 --> T3
-    T2 --> T4
-    T3 --> T4
-    T4 --> T5
+    T2 --> T5
+    T3 --> T5
+    T4 --> T6
 ```
 
-### Code Validation Gate (8 Metrics)
+### Code Validation Gate (10 Metrics)
 
-After each task is implemented, the `@code_evaluator` agent independently scores the output against 8 metrics:
+After each task is implemented, the `@code_evaluator` agent independently scores the output against 10 metrics:
 
 | # | Metric | What It Checks | Platform-Specific |
 |---|--------|---------------|-------------------|
 | 1 | **SC** — Syntactic Correctness | Compiles without errors? | `tsc --noEmit` / `flutter analyze` |
-| 2 | **RF** — Requirements Fidelity | Matches task `acceptance_criteria`? | Compare code to YAML spec |
-| 3 | **SA** — SOLID Adherence | Follows SOLID principles? | NestJS module pattern / Clean Architecture |
-| 4 | **SE** — Security | OWASP Top 10 free? | Guards, validation, no injection |
-| 5 | **EH** — Error Handling | Failures handled gracefully? | `@Catch()` / `handleAPICall` |
-| 6 | **SL** — Scalability | Hot-path complexity? | Pagination, indexes, `ListView.builder` |
-| 7 | **CC** — Code Clarity | Readable and self-documenting? | Project convention conformance |
-| 8 | **CO** — Completeness | No TODOs/stubs? | No `FIXME`, no placeholders |
+| 2 | **TE** — Test Existence | Unit/widget/integration tests exist? | Check test directories |
+| 3 | **TP** — Test Pass Rate | Test suites execute and pass successfully? | `npm run test` / `flutter test` |
+| 4 | **RF** — Requirements Fidelity | Matches task `acceptance_criteria`? | Compare code to Markdown spec |
+| 5 | **SA** — SOLID Adherence | Follows SOLID principles? | NestJS module pattern / Clean Architecture |
+| 6 | **SE** — Security | OWASP Top 10 free? | Guards, validation, no injection |
+| 7 | **EH** — Error Handling | Failures handled gracefully? | `@Catch()` / `handleAPICall` |
+| 8 | **SL** — Scalability | Hot-path complexity? | Pagination, indexes, `ListView.builder` |
+| 9 | **CC** — Code Clarity | Readable and self-documenting? | Project convention conformance |
+| 10| **CO** — Completeness | No TODOs/stubs? | No `FIXME`, no placeholders |
 
-**Pass criteria:** `avg(M₁…M₈) ≥ 95 AND min(M₁…M₈) ≥ 80`
+**Pass criteria:** `avg(M₁…M₁₀) ≥ 95 AND min(M₁…M₁₀) ≥ 80`
 
-On failure: evaluator returns **≤20 line remediation** with `file:line` references and numbered action items. Builder applies fixes and re-submits (max 3 iterations).
+On failure: evaluator returns a **≤20 line remediation** with `file:line` references and numbered action items. The builder applies fixes and re-submits (max 3 iterations).
 
 ### Journal Tracking with Confidence Scoring
 
@@ -277,8 +232,8 @@ Each agent session writes a journal entry with YAML frontmatter and structured M
 ```yaml
 ---
 agent: Claude Code (Opus 4.5)
-start_time: 2026-07-05T10:00:00Z
-end_time: 2026-07-05T11:30:00Z
+start_time: 2026-07-06T10:00:00Z
+end_time: 2026-07-06T11:30:00Z
 confidence: 0.88
 session_type: development
 files_modified:
@@ -292,27 +247,50 @@ Confidence calibration: ≥0.95 production-ready, 0.85–0.94 well tested, 0.75�
 
 ### Epic Lifecycle
 
-1. **Creation:** Orchestrator creates skeleton task YAMLs + EPIC.md → dispatches planners to enrich YAMLs with description, files_to_touch, acceptance_criteria → `spoq/Epic-{id}/`
+1. **Creation:** Orchestrator creates EPIC.md and `context_{platform}.json` context files → dispatches planners to write `{active_task_id}.md` plans → `.ebpearls/Epic-{id}/`
 2. **Execution:** Orchestrator computes waves, dispatches builders, invokes evaluator per task. ROADMAP.md → `in-progress`
-3. **Validation:** Each task scored against 8 metrics; failed tasks enter remediation loop
+3. **Validation:** Each task scored against 10 metrics; failed tasks enter remediation loop
 4. **Completion:** All tasks passed → ROADMAP.md → `done`. No filesystem move needed.
 5. **Commit:** Branch-per-epic with squash-merge to main. Commits at wave boundaries.
 
 ---
 
-## 5. Specialist Agent Pool
+## 5. Specialist Agent Pool & Execution Bridge
 
 All agent profiles live in `.opencode/agents/`. Primary agents are invoked directly by pipeline nodes. Subagents are delegated via `@agent-name` syntax.
+
+### OpenCode Execution Bridge
+
+Agents are defined as Markdown files (`.opencode/agents/*.md`) containing YAML frontmatter configuration (such as permitted tools, OpenAI/Anthropic model selections) and system prompt rules. 
+
+The Python orchestrator communicates with the OpenCode server over HTTP REST endpoints:
+1. **Create Session**: `POST /session` -> yields a unique `session_id`.
+2. **Execute Agent**: `POST /session/{session_id}/message` -> sends JSON payload:
+   ```json
+   {
+     "agent": "api_builder",
+     "parts": [{"text": "hydrated prompt context"}]
+   }
+   ```
+3. **SSE Progress Stream**: `GET /event` -> streams real-time console log and agent action deltas.
+4. **Parse Output**: The session concludes when the agent outputs a final JSON block, which the bridge translates into a `JobResult`.
+
+Platform and pipeline phase map directly to target agent profiles:
+- Flutter + Planning -> `flutter_planner`
+- Flutter + Building -> `flutter_builder`
+- API + Planning -> `api_planner`
+- API + Building -> `api_builder`
+- Validation Gate -> `code_evaluator`
 
 ### Primary Agents
 
 | Agent | Platform | Responsibility |
 |:---|:---|:---|
 | `multi_agent_orchestrator` | Cross-Platform | Creates epics, computes waves, dispatches builders, manages lifecycle |
-| `code_evaluator` | Cross-Platform | Independent 8-metric code reviewer (read-only) |
-| `api_planner` | API (NestJS) | Audits modules, enriches task YAML description/files_to_touch/acceptance_criteria |
+| `code_evaluator` | Cross-Platform | Independent 10-metric code reviewer (read-only) |
+| `api_planner` | API (NestJS) | Audits modules, writes `{active_task_id}.md` implementation plans |
 | `api_builder` | API (NestJS) | Implements schemas, DTOs, services, resolvers, modules |
-| `flutter_planner` | Flutter | Reviews widget trees, enriches task YAML description/files_to_touch/acceptance_criteria |
+| `flutter_planner` | Flutter | Reviews widget trees, writes `{active_task_id}.md` implementation plans |
 | `flutter_builder` | Flutter | Generates domain/data/state/UI layers |
 | `web_planner` | React/Next.js | Plans components and routing |
 | `web_builder` | React/Next.js | Scaffolds pages and styles |
@@ -342,26 +320,13 @@ All agent profiles live in `.opencode/agents/`. Primary agents are invoked direc
 | `@flutter_linter` | `flutter_builder` | `flutter analyze`, targeted fixes |
 | `@flutter_figma_assets` | `flutter_planner` | Figma design token extraction |
 
-### Delegation Patterns
-
-```
-api_builder → @api_schema_builder → @api_dto_generator → @api_service_builder
-           → @api_route_builder → @api_module_integrator → @api_linter
-           → @code_evaluator (after each task)
-
-flutter_builder → @flutter_domain → @flutter_graphql → @flutter_data
-               → @flutter_state → @flutter_ui → @flutter_ui_refiner
-               → @flutter_design_system → @flutter_localization → @flutter_linter
-               → @code_evaluator (after each task)
-```
-
 ### Skill Framework
 
 Reusable capabilities live in `.opencode/skills/`:
 
 | Skill | Purpose |
 |:---|:---|
-| `agent-validation` | 8-metric code scoring rubric (SC, RF, SA, SE, EH, SL, CC, CO) |
+| `agent-validation` | 10-metric code scoring rubric (SC, TE, TP, RF, SA, SE, EH, SL, CC, CO) |
 | `journal-tracker` | Session journal format with confidence calibration |
 | `api-scaffolder` | NestJS module, service, resolver patterns |
 | `nestjs-graphql-resolvers` | Code-first GraphQL types and resolvers |
@@ -379,61 +344,78 @@ Reusable capabilities live in `.opencode/skills/`:
 
 ## 6. End-to-End Pipeline Execution Lifecycle
 
+The sequence diagram below shows the runtime pipeline execution loop, mapping host HTTP requests to the stateful LangGraph engine, and subsequent REST/SSE interactions with the OpenCode container.
+
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Pipeline as LangGraph Worker
-    participant DB as DB Service (Postgres/JSON)
-    participant git as Git Service
-    participant OpenCode as OpenCode Server (LLM)
-    participant Repo as Target Project Repo
+    actor User as User (curl POST)
+    participant FastAPI as FastAPI Host (Port 8001)
+    participant Graph as LangGraph Engine
+    participant Git as Git Service
+    participant OpenCode as OpenCode Server (Port 4096)
+    participant Workspace as Isolated Workspace
 
-    Note over Pipeline,Repo: 1. Setup & Workspace Isolation
-    Pipeline->>DB: Fetch job details (keyed by space_name + ticket_id)
-    Pipeline->>git: Clone into workspace/<space_name>/<platform>/
-    Pipeline->>Repo: Resolve dependencies (pub get / npm install)
+    User->>FastAPI: POST /execute (dummy_request.json)
+    FastAPI->>Graph: Initialize state & trigger execution graph
 
-    Note over Pipeline,Repo: 2. Epic Creation & Planning Enrichment
-    Pipeline->>OpenCode: Dispatch to multi_agent_orchestrator
-    OpenCode->>Repo: Create spoq/Epic-{id}/
-    OpenCode->>Repo: Write EPIC.md + skeleton task YAMLs + context files
-    OpenCode->>OpenCode: Dispatch @api_planner / @flutter_planner
-    OpenCode->>Repo: Enrich task YAMLs (description, files_to_touch, acceptance_criteria)
-    OpenCode-->>Pipeline: OrchestrationStrategy (mode, waves)
+    %% prepare phase
+    Note over Graph,Workspace: 1. Prepare Phase
+    Graph->>Git: Clone/fetch repositories concurrently
+    Git->>Workspace: Initialize sub-projects, checkout branch, run install/pub get
 
-    Note over Pipeline,Repo: 3. Wave Execution with Code Validation
-    loop Every SPOQ wave
-        Pipeline->>OpenCode: Dispatch to @api_builder / @flutter_builder
-        OpenCode->>OpenCode: Delegate to subagents per layer
-        OpenCode->>Repo: Write code to filesystem
+    %% orchestrate phase
+    Note over Graph,Workspace: 2. Orchestrate Phase
+    Graph->>Graph: Bypasses LLM classification if tasks[] defined. Sets SPOQ mode.
+    Graph->>Graph: Decomposes tasks topologically into Waves
 
-        Note over OpenCode: Independent Code Validation
-        OpenCode->>OpenCode: Invoke @code_evaluator
-        OpenCode->>Repo: Read written code + task YAML
-        OpenCode->>OpenCode: Score 8 metrics (SC, RF, SA, SE, EH, SL, CC, CO)
-        alt avg ≥ 95 AND min ≥ 80
-            OpenCode->>Repo: Write journal entry with confidence score
-            OpenCode-->>Pipeline: Task passed
-        else
-            OpenCode->>OpenCode: Generate ≤20 line remediation
-            OpenCode->>Repo: Apply fixes
-            OpenCode->>OpenCode: Re-score (max 3 iterations)
+    %% plan/generate loop
+    Note over Graph,Workspace: 3. Wave Execution Loop
+    loop Every computed Wave
+        %% plan phase
+        Note over Graph,OpenCode: Planning (Concurrent)
+        Graph->>OpenCode: POST /session (Create api/flutter planner sessions)
+        Graph->>OpenCode: POST /session/{id}/message (Pass requirements + active_task_id)
+        OpenCode->>Workspace: Audit code & write plan to {active_task_id}.md
+        OpenCode-->>Graph: Return JobResult (Success)
+
+        %% generate phase
+        Note over Graph,OpenCode: Implementation (Concurrent)
+        Graph->>OpenCode: POST /session (Create api/flutter builder sessions)
+        Graph->>OpenCode: POST /session/{id}/message (Pass plan path)
+        OpenCode->>Workspace: Write code implementations
+        OpenCode-->>Graph: Return JobResult (Success)
+
+        %% validation gate
+        Note over Graph,OpenCode: Quality Gate Validation
+        Graph->>OpenCode: POST /session (Create code_evaluator session)
+        OpenCode->>Workspace: Read plan & modified code
+        OpenCode->>OpenCode: Run tsc/flutter analyze & score 10 metrics
+        alt quality gate failed
+            Note over Graph,OpenCode: Retry / Remediation Loop
+            OpenCode-->>Graph: Return Fail + remediation text
+            Graph->>OpenCode: Invoke builder with remediation (max 3 repair iterations)
+        else quality gate passed
+            OpenCode->>Workspace: Write validation journal
+            OpenCode-->>Graph: Return Pass
         end
 
-        Pipeline->>Repo: Commit at wave boundary
+        Graph->>Git: Commit wave boundaries
     end
 
-    Note over Pipeline,Repo: 4. Epic Completion
-    Pipeline->>Repo: Update spoq/ROADMAP.md → status: done
+    %% contract auditing
+    Note over Graph,Workspace: 4. Contract Verification
+    Graph->>OpenCode: Invoke contract_verifier (Verify GraphQL schema matches client operations)
+    OpenCode-->>Graph: Return status (pass / failure details)
 
-    Note over Pipeline,Repo: 5. Contract Auditing
-    Pipeline->>OpenCode: Invoke @contract_verifier
-    OpenCode-->>Pipeline: Verification status (pass / diff)
-
-    Note over Pipeline,Repo: 6. Publishing
-    Pipeline->>git: Squash-merge branch to main
-    Pipeline->>git: Create Pull Request
-    Pipeline->>DB: Write final status, session IDs, PR URL
+    %% publish phase
+    Note over Graph,Workspace: 5. Publishing Phase
+    Graph->>Git: Squash-merge feature branch to main & create Pull Request
+    
+    %% finalize phase
+    Note over Graph,Workspace: 6. Finalization Phase
+    Graph->>FastAPI: Pipeline done (status & outputs)
+    FastAPI-->>User: Return response JSON (PR URLs & wave status summary)
 ```
 
 ---
@@ -474,16 +456,14 @@ sequenceDiagram
 | `hours` | `List[EpicTaskHour]` | Per-platform hour estimates |
 | `active_platforms` | `List[str]` (property) | Platforms with > 0 estimated hours |
 
-### `SPOQTask` — YAML Task Schema
+### `SPOQTask` — Task Schema
 
 | Field | Type | Description |
 |:---|:---|:---|
-| `id` | `str` | Unique task ID (e.g. `01-create-schema`) |
+| `id` | `str` | Unique task ID (e.g. `api-impl-41831`) |
 | `phase` | `int` | Wave assignment (0 = no dependencies) |
 | `dependencies` | `List[str]` | Prerequisite task IDs |
 | `skills_required` | `List[str]` | Required domain skills |
-| `files_to_touch` | `List[str]` | Files the agent may modify |
-| `acceptance_criteria` | `List[str]` | Verification checklist |
 
 ### `GraphState` — LangGraph Node State
 
@@ -507,58 +487,54 @@ sequenceDiagram
 ├── docker-compose.yml                ← Multi-container local execution setup
 ├── pyproject.toml                    ← Python package configuration (Poetry/Pyright)
 ├── .gitignore                        ← Excludes workspace/, .opencode/, .env
+├── .env                              ← Local environment configuration file
 │
-├── spoq/                             ← SPOQ reference template
-│   ├── ROADMAP.md                    ← Cross-epic registry
-│   └── Epic-44445/                   ← Sample epic template
-│       ├── EPIC.md
-│       ├── contract-41831.yml
-│       ├── api-impl-41831.yml
-│       ├── flutter-impl-41831.yml
-│       ├── integration-41831.yml
-│       └── journals/
+├── test/
+│   ├── dummy_request.json            ← Sample API execution payload
+│   ├── test_pipeline.py              ← Concurrent pipeline simulation dry run
+│   └── test_opencode_api.py          ← OpenCode bridge path isolation verification
 │
 ├── workspace/                        ← (gitignored) Runtime project checkouts
 │   └── <space_name>/
-│       ├── spoq/epics/               ← Active epics created at runtime
+│       ├── .ebpearls/                ← Isolated epic context and plans
+│       │   ├── ROADMAP.md            ← Progress tracker
+│       │   └── Epic-{id}/
 │       └── <platform>/
 │
 ├── .opencode/                        ← (gitignored) Agent state and profiles
-│   ├── agents/                       ← 38 agent instruction files
+│   ├── agents/                       ← Agent profile instructions (.md)
 │   │   ├── multi_agent_orchestrator.md
-│   │   ├── code_evaluator.md         ← Independent 8-metric reviewer
+│   │   ├── code_evaluator.md         ← Independent 10-metric reviewer
 │   │   ├── api_builder.md / flutter_builder.md
 │   │   ├── api_planner.md / flutter_planner.md
-│   │   ├── web_builder.md / web_planner.md
-│   │   ├── api_schema_builder.md / api_dto_generator.md / ...
-│   │   ├── flutter_domain.md / flutter_data.md / flutter_state.md / flutter_ui.md
-│   │   ├── bug_fixer.md / ui_refiner.md
-│   │   ├── contract_verifier.md / figma_assets.md
-│   │   └── linter.md / design_system.md / localization.md / ...
-│   ├── skills/                       ← 13 reusable skill definitions
+│   │   └── ...
+│   ├── skills/                       ← Reusable skill definitions
 │   │   ├── agent-validation/SKILL.md
-│   │   ├── journal-tracker/SKILL.md
 │   │   └── ...
 │   ├── sessions.json
 │   └── jobs.json
 │
 └── src/
     └── ebdev/
+        ├── api/
+        │   └── main.py               ← FastAPI server exposing the /execute endpoint
         ├── config.py                 ← Environment configuration loader
         ├── core/
         │   ├── exceptions.py         ← Domain exceptions
         │   ├── graph.py              ← LangGraph StateGraph pipeline & routing
+        │   ├── spoq_map.py           ← Task DAG and SPOQ waves builder
+        │   ├── spoq_utils.py         ← Task loading & epic lifecycle helper
         │   ├── nodes/
         │   │   ├── prepare.py        ← Workspace clone & dependency setup
         │   │   ├── orchestrate.py    ← Strategy selection & SPOQ DAG generation
         │   │   ├── plan.py           ← Concurrent planner invocation
         │   │   ├── generate.py       ← Concurrent builder invocation
-        │   │   ├── validate.py       ← Platform linter/test runner
+        │   │   ├── validate.py       ← Quality gate validator dispatcher
         │   │   ├── contract.py       ← Cross-platform schema verifier
         │   │   ├── repair.py         ← Failure analysis and repair
         │   │   ├── publish.py        ← Branch commit and PR creation
         │   │   └── finalize.py       ← Job status persistence
-        │   └── spoq_utils.py         ← Wave computation, task loading, epic lifecycle
+        │   └── logger.py
         ├── models/
         │   └── schemas.py            ← JobContext, GraphState, SPOQTask, EpicTask, ...
         ├── platforms/
@@ -567,7 +543,6 @@ sequenceDiagram
         │   └── api.py                ← ApiStrategy
         └── services/
             ├── db.py                 ← Job tracking & JSON fallback
-            ├── flutter_cmd.py        ← Headless Flutter CLI executor
             ├── git.py                ← Git repository, branch, and PR provider
             ├── opencode.py           ← SSE-streaming OpenCode client
             ├── prompts.py            ← Prompt builders with path translation
