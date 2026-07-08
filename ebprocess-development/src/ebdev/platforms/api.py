@@ -230,8 +230,8 @@ class ApiStrategy(PlatformStrategy):
                                 if mod_dir:
                                     test_target = mod_dir
                                     break
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to read package.json scripts for testing: %s", exc)
 
             if test_target:
                 logger.info("Running NestJS tests target: %s...", test_target)

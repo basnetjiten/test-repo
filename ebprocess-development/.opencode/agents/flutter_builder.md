@@ -48,6 +48,7 @@ You implement Flutter Clean Architecture features. After writing code, you invok
 ## Workflow
 
 1. **Read Task Plan:** Read `{spoq_epic_dir}/{active_task_id}.md` — extract `Files to Touch`, `Acceptance Criteria`, objective, scope, and technical audit. Identify the feature name for directory resolution.
+   - **Check Repair Mode:** Check if `repair_journal` is present in your context (passed via `shared_context`). If it exists, you are in **repair mode**. Do NOT re-implement everything; focus on implementing fixes for specific errors and `file:line` locations listed under remediation items in `repair_journal`.
    - **Schema Handoff Check**: Check if an updated API schema file (`schema.graphql` or `schema.json`) exists in `{spoq_epic_dir}`. If it exists, copy it to the local project directory `graphql/schema.graphql` (or relevant target path) and trigger the code generator skill (`graphql-client-codegen` or equivalent) to synchronize client models.
 
 2. **Scaffold feature directories** if new feature:

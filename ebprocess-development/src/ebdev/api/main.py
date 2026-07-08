@@ -2,7 +2,7 @@ import asyncio
 import logging
 import sys
 import uuid
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
@@ -62,8 +62,12 @@ class ExecutePipelineRequest(BaseModel):
 MAX_RETRIES = 3
 RETRY_BACKOFF_BASE = 2
 
-async def _invoke_with_retry(graph, initial_state, config):
-    last_exc = None
+async def _invoke_with_retry(
+    graph: Any,
+    initial_state: GraphState | None,
+    config: Dict[str, Any]
+) -> Dict[str, Any]:
+    last_exc: Exception | None = None
     for attempt in range(MAX_RETRIES):
         try:
             return await graph.ainvoke(initial_state, config=config, durability="async")
@@ -79,7 +83,9 @@ async def _invoke_with_retry(graph, initial_state, config):
                     await asyncio.sleep(delay)
                     continue
             raise
-    raise last_exc
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("Retry loop completed without execution or error")
 
 def _is_transient_db_error(exc: Exception) -> bool:
     try:
@@ -111,7 +117,6 @@ async def execute_pipeline(request: ExecutePipelineRequest):
         title=request.title,
         description=request.description,
         status="todo",
-        assignee="api-agent",
         tasks=request.tasks
     )
 
@@ -130,7 +135,7 @@ async def execute_pipeline(request: ExecutePipelineRequest):
     )
 
     initial_state = GraphState(context=context, done=False, failed=False)
-    config = {"configurable": {"thread_id": f"thread-{request.ticket_id}"}}
+    config: Dict[str, Any] = {"configurable": {"thread_id": f"thread-{request.ticket_id}"}}
 
     try:
         # ------------------------------------------------------------------
@@ -142,8 +147,13 @@ async def execute_pipeline(request: ExecutePipelineRequest):
         existing_state = None
         try:
             existing_state = await graph.aget_state(config)
-        except Exception:
-            logger.debug("No existing checkpoint for %s — starting fresh.", request.ticket_id)
+        except Exception as exc:
+            logger.warning(
+                "Failed to retrieve checkpoint state for %s: %s. Starting fresh.",
+                request.ticket_id,
+                exc,
+                exc_info=True,
+            )
 
         was_resumed = False
 
@@ -166,10 +176,12 @@ async def execute_pipeline(request: ExecutePipelineRequest):
                 if checkpointer is not None and hasattr(checkpointer, "adelete_thread"):
                     try:
                         await checkpointer.adelete_thread(f"thread-{request.ticket_id}")
-                    except Exception:
+                    except Exception as exc:
                         logger.warning(
-                            "Failed to clear checkpoints for %s; proceeding with fresh state.",
+                            "Failed to clear checkpoints for %s: %s; proceeding with fresh state.",
                             request.ticket_id,
+                            exc,
+                            exc_info=True,
                         )
                 final_state = await _invoke_with_retry(graph, initial_state, config)
         else:

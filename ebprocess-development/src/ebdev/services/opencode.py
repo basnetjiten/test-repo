@@ -420,7 +420,7 @@ class OpenCodeService:
         if not session_id:
             try:
                 session_id = await client.create_session(title=f"Job {job_context.ticket_id}")
-            except Exception as e:
+            except (httpx.HTTPError, json.JSONDecodeError, KeyError) as e:
                 logger.error("Failed to create agent execution session: %s", e)
                 return JobResult(
                     task_id=job_context.ticket_id,
@@ -474,12 +474,13 @@ class OpenCodeService:
                 prompt=prompt,
                 model=config.OPENCODE_MODEL,
             )
-        except Exception as e:
+        except (httpx.HTTPError, json.JSONDecodeError) as e:
             # Check if this is a 404 error indicating a stale/missing session
             is_404 = False
-            if isinstance(e, httpx.HTTPStatusError) and e.response.status_code == 404:
+            response = getattr(e, "response", None)
+            if response is not None and getattr(response, "status_code", None) == 404:
                 is_404 = True
-            elif "404" in str(e) or "Not Found" in str(e):
+            elif isinstance(e, httpx.HTTPError) and ("404" in str(e) or "Not Found" in str(e)):
                 is_404 = True
 
             if is_404 and session_id:
@@ -495,7 +496,7 @@ class OpenCodeService:
                         prompt=prompt,
                         model=config.OPENCODE_MODEL,
                     )
-                except Exception as retry_err:
+                except (httpx.HTTPError, json.JSONDecodeError, KeyError) as retry_err:
                     logger.error("Failed to execute agent instructions on new session: %s", retry_err)
                     return JobResult(
                         task_id=job_context.ticket_id,

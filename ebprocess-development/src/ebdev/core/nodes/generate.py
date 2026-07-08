@@ -161,12 +161,32 @@ async def generate_node(state: GraphState) -> GraphState:
         elif label == "ui_refine":
             target_agent = "ui_refiner"
 
+        # Check if we have an evaluation journal in state.generated_artifacts for this task
+        remediation_content = None
+        if is_spoq and task_id in state.generated_artifacts:
+            journal_path_str = state.generated_artifacts[task_id].get("journal")
+            if journal_path_str:
+                # Resolve absolute path using project storage dir parent as base
+                journal_path = Path(ctx.project_storage_dir().parent) / journal_path_str
+                if journal_path.exists():
+                    try:
+                        content = journal_path.read_text(encoding="utf-8")
+                        if "## Remediation" in content:
+                            remediation_content = content.split("## Remediation")[1].strip()
+                            logger.info("%s Injected repair_journal from evaluation journal file", task_label)
+                    except Exception as e:
+                        logger.warning("%s Could not read journal file: %s", task_label, e)
+
+        updated_shared = {**state.shared_context}
+        if remediation_content:
+            updated_shared["repair_journal"] = remediation_content
+
         plat_ctx = ctx.model_copy(update={
             "repo_path": str(plat_path),
             "platform": platform,
             "active_task_id": active_task_id if is_spoq else None,
             "current_agent": target_agent,
-            "shared_context": state.shared_context,
+            "shared_context": updated_shared,
         })
 
         session_id_key = f"{ctx.ticket_id}_{platform}"

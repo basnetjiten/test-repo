@@ -21,13 +21,15 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from ebdev.core.exceptions import EbDevError
+from ebdev.core.exceptions import EbDevError, EpicStateError
 from ebdev.core.nodes.common import send_progress
 from ebdev.core.spoq_utils import get_state_active_tasks
+from ebdev.models.schemas import TaskArtifactState, TaskArtifacts
 from ebdev.platforms import get_platform_strategy
+from ebdev.services.epic_state import get_epic_state_service
 
 if TYPE_CHECKING:
-    from ebdev.models.schemas import GraphState
+    from ebdev.models.schemas import GraphState, JobContext
 
 # ---------------------------------------------------------------------------
 # Module-level logger
@@ -36,9 +38,94 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Private helpers
+# ---------------------------------------------------------------------------
+
+async def _write_validation_state(
+    ctx: "JobContext",  # noqa: F821
+    completed_ids: set[str],
+    *,
+    passed: bool,
+    platform_errors: dict[str, list[str]],
+) -> None:
+    """
+    Update ``state.json`` after a SPOQ validation wave completes.
+
+    Parameters
+    ----------
+    ctx:
+        Job context used to resolve the epic directory path and space name.
+    completed_ids:
+        Set of task IDs that were part of this validation wave.
+    passed:
+        ``True`` when all platforms passed; ``False`` on any failure.
+    platform_errors:
+        Per-platform error lists — used to derive journal path hints.
+
+    Notes
+    -----
+    Errors are caught and logged rather than re-raised so that a state.json
+    write failure never interrupts the main pipeline.
+    """
+    if not ctx.spoq_epic_dir:
+        return
+
+    epic_dir = ctx.project_storage_dir() / ctx.spoq_epic_dir
+    svc = get_epic_state_service(epic_dir)
+
+    try:
+        snapshot = await svc.load_or_init(
+            epic_id=ctx.spoq_epic_dir,
+            space_name=ctx.space_name,
+        )
+        for task_id in completed_ids:
+            existing = snapshot.get_task(task_id)
+            platform = existing.platform if existing else ctx.platform
+
+            # Attempt to derive the journal path from the known naming convention.
+            journal_rel: str | None = None
+            if existing and existing.artifacts.journal:
+                journal_rel = existing.artifacts.journal
+            else:
+                journals_dir = epic_dir / "journals"
+                candidate = journals_dir / f"{task_id}.evaluation.md"
+                if candidate.exists():
+                    try:
+                        journal_rel = str(
+                            candidate.relative_to(ctx.project_storage_dir().parent)
+                        )
+                    except ValueError:
+                        journal_rel = str(candidate)
+
+            updated_artifacts = TaskArtifacts(
+                contract=existing.artifacts.contract if existing else None,
+                journal=journal_rel,
+                schema_file=existing.artifacts.schema_file if existing else None,
+                verification=existing.artifacts.verification if existing else None,
+            )
+            task_state = TaskArtifactState(
+                task_id=task_id,
+                platform=platform,
+                status="passed" if passed else "evaluate_failed",
+                artifacts=updated_artifacts,
+                repair_iteration=existing.repair_iteration if existing else 0,
+                evaluation_avg=None,
+                evaluation_min=None,
+            )
+            snapshot = snapshot.upsert_task(task_state)
+
+        await svc.save(snapshot)
+    except EpicStateError as exc:
+        logger.warning(
+            "Could not update state.json after validation (non-fatal): %s", exc
+        )
+
+
+# ---------------------------------------------------------------------------
 # Node Entry Point
 # ---------------------------------------------------------------------------
 async def validate_node(state: GraphState) -> GraphState:
+
     """
     Run code verification concurrently for all active stage platforms.
 
@@ -185,6 +272,7 @@ async def validate_node(state: GraphState) -> GraphState:
         stages_finished = True
         updated_spoq_tasks = list(state.spoq_tasks)
         status_msg: str = ""
+        updated_artifacts = {**state.generated_artifacts}
 
         if all_passed:
             if is_spoq:
@@ -198,6 +286,31 @@ async def validate_node(state: GraphState) -> GraphState:
                 logger.info(
                     "Marked %d SPOQ tasks as completed in state.", len(completed_ids)
                 )
+                # Mirror completion into the .ebpearls artifact registry.
+                await _write_validation_state(
+                    ctx=state.context,
+                    completed_ids=completed_ids,
+                    passed=True,
+                    platform_errors={},
+                )
+                
+                # Update GraphState.generated_artifacts
+                epic_dir = ctx.project_storage_dir() / ctx.spoq_epic_dir if ctx.spoq_epic_dir else None
+                for task_id in completed_ids:
+                    existing = updated_artifacts.get(task_id, {})
+                    journal_rel = existing.get("journal") or ""
+                    if not journal_rel and epic_dir:
+                        candidate = epic_dir / "journals" / f"{task_id}.evaluation.md"
+                        if candidate.exists():
+                            try:
+                                journal_rel = str(candidate.relative_to(ctx.project_storage_dir().parent))
+                            except ValueError:
+                                journal_rel = str(candidate)
+                    updated_artifacts[task_id] = {
+                        **existing,
+                        "status": "passed",
+                        "journal": journal_rel,
+                    }
 
                 # Check if all tasks in the current epic are done
                 remaining = [
@@ -236,6 +349,41 @@ async def validate_node(state: GraphState) -> GraphState:
                 f"Validation failed with {len(combined_errors)} check errors. "
                 "Repair needed."
             )
+            # Mirror failure into the .ebpearls artifact registry so agents
+            # can identify which tasks need repair on next resume.
+            if is_spoq:
+                failed_ids = {
+                    t.id
+                    for t in active_tasks
+                    if state.failed_platforms.get(
+                        next(iter(t.skills_required), ctx.platform), False
+                    )
+                }
+                if failed_ids:
+                    await _write_validation_state(
+                        ctx=state.context,
+                        completed_ids=failed_ids,
+                        passed=False,
+                        platform_errors=platform_errors,
+                    )
+                    
+                    # Update GraphState.generated_artifacts
+                    epic_dir = ctx.project_storage_dir() / ctx.spoq_epic_dir if ctx.spoq_epic_dir else None
+                    for task_id in failed_ids:
+                        existing = updated_artifacts.get(task_id, {})
+                        journal_rel = existing.get("journal") or ""
+                        if not journal_rel and epic_dir:
+                            candidate = epic_dir / "journals" / f"{task_id}.evaluation.md"
+                            if candidate.exists():
+                                try:
+                                    journal_rel = str(candidate.relative_to(ctx.project_storage_dir().parent))
+                                except ValueError:
+                                    journal_rel = str(candidate)
+                        updated_artifacts[task_id] = {
+                            **existing,
+                            "status": "evaluate_failed",
+                            "journal": journal_rel,
+                        }
 
         await send_progress(state, status_msg)
 
@@ -251,6 +399,7 @@ async def validate_node(state: GraphState) -> GraphState:
             "done_platforms": done_platforms,
             "failed_platforms": failed_platforms,
             "spoq_tasks": updated_spoq_tasks,
+            "generated_artifacts": updated_artifacts,
         })
 
     except (EbDevError, ValueError, KeyError, RuntimeError) as e:

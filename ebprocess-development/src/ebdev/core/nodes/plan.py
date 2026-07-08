@@ -24,16 +24,87 @@ from typing import TYPE_CHECKING
 from ebdev.config import config
 from ebdev.core.nodes.common import send_progress
 from ebdev.core.spoq_utils import get_state_active_tasks
-from ebdev.models.schemas import JobResult
+from ebdev.core.exceptions import EpicStateError
+from ebdev.models.schemas import JobResult, TaskArtifactState, TaskArtifacts
+from ebdev.services.epic_state import get_epic_state_service
 from ebdev.services.opencode import invoke_opencode
 
 if TYPE_CHECKING:
-    from ebdev.models.schemas import GraphState
+    from ebdev.models.schemas import GraphState, EpicStateSnapshot, JobContext, TaskStatus
 
 # ---------------------------------------------------------------------------
 # Module-level logger
 # ---------------------------------------------------------------------------
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Private helpers
+# ---------------------------------------------------------------------------
+
+async def _write_plan_state(
+    ctx: "JobContext",  # noqa: F821 — resolved at runtime via TYPE_CHECKING
+    task_id: str,
+    platform: str,
+    plan_file: Path,
+    *,
+    status: "TaskStatus",  # noqa: F821
+) -> None:
+    """
+    Update the epic's ``state.json`` after a plan file is confirmed on disk.
+
+    Parameters
+    ----------
+    ctx:
+        The current job context — used to resolve the epic directory path.
+    task_id:
+        The active SPOQ task identifier (e.g. ``contract-41831``).
+    platform:
+        Target platform for the task.
+    plan_file:
+        Absolute path to the verified plan Markdown file.
+    status:
+        The lifecycle status to record (``built`` | ``evaluate_failed``).
+
+    Notes
+    -----
+    Errors are caught and logged rather than re-raised so that a state.json
+    write failure never interrupts the main pipeline — the LangGraph
+    checkpoint remains the authoritative state source.
+    """
+    if not ctx.spoq_epic_dir:
+        return
+
+    from ebdev.models.schemas import TaskStatus  # noqa: F401 — Literal type used at runtime
+
+    epic_dir = ctx.project_storage_dir() / ctx.spoq_epic_dir
+    svc = get_epic_state_service(epic_dir)
+
+    try:
+        snapshot = await svc.load_or_init(
+            epic_id=ctx.spoq_epic_dir,
+            space_name=ctx.space_name,
+        )
+        existing = snapshot.get_task(task_id)
+        contract_rel = str(plan_file.relative_to(ctx.project_storage_dir().parent))
+        updated_artifacts = TaskArtifacts(
+            contract=contract_rel,
+            journal=existing.artifacts.journal if existing else None,
+            schema_file=existing.artifacts.schema_file if existing else None,
+            verification=existing.artifacts.verification if existing else None,
+        )
+        task_state = TaskArtifactState(
+            task_id=task_id,
+            platform=platform,
+            status=status,
+            artifacts=updated_artifacts,
+            repair_iteration=existing.repair_iteration if existing else 0,
+        )
+        await svc.update_task_state(snapshot, task_state)
+    except EpicStateError as exc:
+        logger.warning(
+            "Could not update state.json for task %s (non-fatal): %s", task_id, exc
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -92,7 +163,7 @@ async def plan_node(state: GraphState) -> GraphState:
     # ------------------------------------------------------------------
     async def plan_single_task_platform(
         task_id: str, platform: str
-    ) -> tuple[str, JobResult]:
+    ) -> tuple[str, str, JobResult, Path]:
         task_label = f"[{task_id}:{platform}]" if task_id else f"[{platform}]"
         logger.info("%s Running planner...", task_label)
 
@@ -105,14 +176,31 @@ async def plan_node(state: GraphState) -> GraphState:
             plan_file = plan_file_dir / f"plan_{platform}.md"
         plan_file.parent.mkdir(parents=True, exist_ok=True)
 
-        if plan_file.exists() and plan_file.stat().st_size > 50:
-            logger.info("%s Plan already exists and valid, skipping plan generation", task_label)
-            return f"{task_id}_{platform}", JobResult(
+        # Check if plan already successfully generated/recorded in GraphState
+        existing_art = state.generated_artifacts.get(task_id, {})
+        if existing_art.get("status") in ("built", "evaluating", "passed") and plan_file.exists() and plan_file.stat().st_size > 50:
+            logger.info("%s Plan already exists in registry, skipping plan generation", task_label)
+            return task_id, platform, JobResult(
                 task_id=ctx.ticket_id,
                 ticket_id=ctx.ticket_id,
                 status="success",
                 summary=f"Plan already exists for {task_id}",
-            )
+            ), plan_file
+
+        if plan_file.exists() and plan_file.stat().st_size > 50:
+            logger.info("%s Plan already exists and valid on disk, skipping plan generation", task_label)
+            # Ensure the artifact registry reflects the idempotency skip so
+            # downstream agents see this task as already planned.
+            if ctx.spoq_epic_dir:
+                await _write_plan_state(
+                    ctx, task_id, platform, plan_file, status="built"
+                )
+            return task_id, platform, JobResult(
+                task_id=ctx.ticket_id,
+                ticket_id=ctx.ticket_id,
+                status="success",
+                summary=f"Plan already exists for {task_id}",
+            ), plan_file
 
         plat_ctx = ctx.model_copy(update={
             "repo_path": str(plat_path),
@@ -152,16 +240,46 @@ async def plan_node(state: GraphState) -> GraphState:
                     task_label,
                     plan_file.stat().st_size,
                 )
+                # Register the generated contract artifact in state.json.
+                if ctx.spoq_epic_dir and result.status == "success":
+                    await _write_plan_state(
+                        ctx, task_id, platform, plan_file, status="built"
+                    )
+                elif ctx.spoq_epic_dir and result.status == "failed":
+                    await _write_plan_state(
+                        ctx, task_id, platform, plan_file, status="evaluate_failed"
+                    )
 
-        return f"{task_id}_{platform}", result
+        return task_id, platform, result, plan_file
 
     try:
+        # Before executing planner, check if plan already exists in generated_artifacts
         platform_runs = await asyncio.gather(
             *[plan_single_task_platform(t, p) for t, p in tasks_to_plan]
         )
         results = {}
-        for key, res in platform_runs:
+        updated_artifacts = {**state.generated_artifacts}
+
+        for task_id, platform, res, plan_file in platform_runs:
+            key = f"{task_id}_{platform}" if task_id else platform
             results[key] = res
+            
+            # Store in GraphState.generated_artifacts
+            if is_spoq and task_id:
+                contract_rel = ""
+                if plan_file and plan_file.exists():
+                    try:
+                        contract_rel = str(plan_file.relative_to(ctx.project_storage_dir().parent))
+                    except ValueError:
+                        contract_rel = str(plan_file)
+                
+                existing = updated_artifacts.get(task_id, {})
+                status = "built" if res.status == "success" else "evaluate_failed"
+                updated_artifacts[task_id] = {
+                    **existing,
+                    "status": status,
+                    "contract": contract_rel,
+                }
 
         duration = round(time.time() - start_time, 2)
         logger.info("Concurrent planners completed in %ss.", duration)
@@ -207,6 +325,7 @@ async def plan_node(state: GraphState) -> GraphState:
             "done_platforms": done_platforms,
             "failed_platforms": failed_platforms,
             "spoq_tasks": updated_spoq_tasks,
+            "generated_artifacts": updated_artifacts,
         })
 
     except Exception as e:

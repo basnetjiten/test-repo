@@ -93,9 +93,12 @@ async def finalize_node(state: GraphState) -> GraphState:
     #    longer needed once the job is complete — keeps storage bounded).
     try:
         await checkpoint.cleanup_thread(f"thread-{ctx.ticket_id}")
-    except Exception:
+    except Exception as exc:
         logger.warning(
-            "Checkpoint cleanup failed for %s (non-critical).", ctx.ticket_id
+            "Checkpoint cleanup failed for %s: %s (non-critical).",
+            ctx.ticket_id,
+            exc,
+            exc_info=True,
         )
 
     duration = round(time.time() - start_time, 2)

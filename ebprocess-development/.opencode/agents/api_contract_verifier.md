@@ -31,7 +31,7 @@ When triggered:
 
 If backend schemas have been updated and are verified safe, trigger the GraphQL code generation skill to update the Flutter definitions:
 - Read and follow `/.opencode/skills/graphql-client-codegen/SKILL.md` (`graphql-client-codegen`).
-- Ensure `schema.graphql` inside the Flutter workspace matches the backendintrospection schema.
+- Ensure `schema.graphql` inside the Flutter workspace matches the backend introspection schema.
 - Run code generator inside the Flutter directory:
   ```bash
   flutter pub run build_runner build --delete-conflicting-outputs

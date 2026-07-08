@@ -78,8 +78,8 @@ async def cleanup_thread(thread_id: str) -> bool:
         await checkpointer.adelete_thread(thread_id)
         logger.info("Cleaned up checkpoint thread: %s", thread_id)
         return True
-    except Exception:
-        logger.exception("Failed to clean up checkpoint thread: %s", thread_id)
+    except Exception as exc:
+        logger.exception("Failed to clean up checkpoint thread %s: %s", thread_id, exc)
         return False
 
 
@@ -111,11 +111,13 @@ async def get_thread_history(
     if checkpointer is None or not hasattr(checkpointer, "alist"):
         return []
 
-    config: dict[str, Any] = {"configurable": {"thread_id": thread_id}}
+    thread_config: dict[str, Any] = {"configurable": {"thread_id": thread_id}}
     history: list[dict[str, Any]] = []
 
     try:
-        results: AsyncIterator = await checkpointer.alist(config, limit=limit)
+        import inspect
+        res = checkpointer.alist(thread_config, limit=limit)
+        results = await res if inspect.isawaitable(res) else res
         async for checkpoint_tuple in results:
             ckpt = checkpoint_tuple.checkpoint
             metadata = getattr(checkpoint_tuple, "metadata", {}) or {}
@@ -130,7 +132,7 @@ async def get_thread_history(
                     ).get("checkpoint_ns", ""),
                 }
             )
-    except Exception:
-        logger.exception("Failed to fetch checkpoint history for thread %s", thread_id)
+    except Exception as exc:
+        logger.exception("Failed to fetch checkpoint history for thread %s: %s", thread_id, exc)
 
     return history

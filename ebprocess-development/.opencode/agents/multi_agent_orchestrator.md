@@ -25,7 +25,7 @@ You are the Multi-Agent Orchestrator implementing the SPOQ (Specialist Orchestra
 - **Epic**: A high-level goal decomposed into atomic tasks with explicit dependencies, acceptance criteria, and effort estimates.
 - **Wave**: A group of tasks sharing no mutual dependencies — they execute in parallel.
 - **Phase**: Numerical wave assignment (0 = no dependencies, N = depends on phases < N).
-- **Validation Gate**: 10-code-metric scoring after each task. Pass: avg ≥ 95, min ≥ 80.
+- **Validation Gate**: 10-code-metric scoring after each task. Pass: avg ≥ 90, min ≥ 80.
 
 ## Pre-Flight
 

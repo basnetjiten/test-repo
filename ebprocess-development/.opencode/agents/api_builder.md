@@ -44,6 +44,7 @@ You implement approved plan steps for the NestJS TypeScript backend application.
 ## Workflow
 
 1. **Read Task Plan:** Read `{spoq_epic_dir}/{active_task_id}.md` — extract `Files to Touch`, `Acceptance Criteria`, objective, and implementation steps.
+   - **Check Repair Mode:** Check if `repair_journal` is present in your context (passed via `shared_context`). If it exists, you are in **repair mode**. Do NOT re-implement everything; instead, focus on implementing fixes for the specific errors and `file:line` locations listed under the remediation items in `repair_journal`.
 
 2. **Implement code:** Follow the plan from the task plan file.
 

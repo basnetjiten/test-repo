@@ -22,3 +22,7 @@ class PlatformStrategyError(EbDevError):
 
 class UnsupportedPlatformError(PlatformStrategyError, ValueError):
     """Raised when an unsupported platform name is requested from the factory."""
+
+
+class EpicStateError(EbDevError):
+    """Raised when reading or writing the .ebpearls/Epic-{id}/state.json artifact registry fails."""
