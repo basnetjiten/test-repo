@@ -128,10 +128,21 @@ For each wave (0, 1, 2, ...):
 
 ## Platform Builder Dispatch Rules
 
-| Platform | Builder Agent |
-|----------|---------------|
-| API (NestJS) | `@api_builder` |
-| Flutter | `@flutter_builder` |
+| Platform | Planner Agent | Builder Agent |
+|----------|---------------|---------------|
+| API (NestJS) | `@api_planner` | `@api_builder` |
+| Flutter | `@flutter_planner` | `@flutter_builder` |
+| Web (Next.js) | `@web_planner` | `@web_builder` |
+
+## Shared Sub-Agent Names (all platforms)
+
+| Purpose | Agent |
+|---|---|
+| Bug diagnosis & fix | `@bug_fixer` |
+| Lint analysis | `@linter` |
+| UI/design-token compliance | `@ui_refiner` |
+| Localization extraction | `@localization` |
+| Code quality gate | `@code_evaluator` |
 
 ## ROADMAP.md Format
 

@@ -14,31 +14,33 @@ Responsibilities
 
 from __future__ import annotations
 
-import logging
 import time
 from typing import TYPE_CHECKING
 
 from ebdev.config import config
 from ebdev.core.exceptions import EpicStateError
+from ebdev.core.logger import get_logger
 from ebdev.core.nodes.common import send_progress
-from ebdev.models.schemas import JobResult, TaskArtifactState
+from ebdev.models.graph_state import JobResult
+from ebdev.models.task import TaskArtifactState
 from ebdev.services.epic_state import get_epic_state_service
 
 if TYPE_CHECKING:
-    from ebdev.models.schemas import GraphState, JobContext
+    from ebdev.models.graph_state import GraphState, JobContext
 
 # ---------------------------------------------------------------------------
 # Module-level logger
 # ---------------------------------------------------------------------------
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------
 
+
 async def _write_repair_state(
-    ctx: "JobContext",  # noqa: F821
+    ctx: "JobContext",
     spoq_tasks: list,
     *,
     iteration: int,
@@ -65,11 +67,7 @@ async def _write_repair_state(
     svc = get_epic_state_service(epic_dir)
 
     # Identify tasks that are in a repair-eligible state.
-    repair_task_ids = {
-        t.id
-        for t in spoq_tasks
-        if t.status in ("in_progress", "pending")
-    }
+    repair_task_ids = {t.id for t in spoq_tasks if t.status in ("in_progress", "pending")}
     if not repair_task_ids:
         return
 
@@ -93,9 +91,7 @@ async def _write_repair_state(
             snapshot = snapshot.upsert_task(task_state)
         await svc.save(snapshot)
     except EpicStateError as exc:
-        logger.warning(
-            "Could not update state.json during repair (non-fatal): %s", exc
-        )
+        logger.warning("Could not update state.json during repair (non-fatal): %s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -120,17 +116,13 @@ async def repair_node(state: GraphState) -> GraphState:
 
     msg = f"Repairing: Evaluating recovery iteration #{iteration}..."
     await send_progress(state, msg)
-    start_time = time.time()
+    time.time()
     ctx = state.context
 
     is_spoq = state.is_spoq
     if is_spoq:
         # Derive active platforms from current state tasks
-        active_task_ids = {
-            t.id
-            for t in state.spoq_tasks
-            if t.status in ("pending", "blocked", "in_progress")
-        }
+        active_task_ids = {t.id for t in state.spoq_tasks if t.status in ("pending", "blocked", "in_progress")}
         all_platforms: list[str] = []
         for t in state.spoq_tasks:
             if t.id in active_task_ids:
@@ -138,35 +130,25 @@ async def repair_node(state: GraphState) -> GraphState:
         active_platforms = list(dict.fromkeys(all_platforms))
     else:
         active_platforms = (
-            state.strategy.stages[state.current_stage]
-            if (state.strategy and state.strategy.stages)
-            else ctx.platforms
+            state.strategy.stages[state.current_stage] if (state.strategy and state.strategy.stages) else ctx.platforms
         )
 
     try:
         failed_plats = [p for p in active_platforms if state.failed_platforms.get(p)]
-        logger.info(
-            "Active stage failed platforms requiring repair: %s", failed_plats
-        )
+        logger.info("Active stage failed platforms requiring repair: %s", failed_plats)
 
         failed_errors: list[str] = []
         for p in failed_plats:
             failed_errors.append(f"--- platform {p} ---")
             plat_prefix = f"[{p}]"
-            plat_errs = [
-                e for e in ctx.validation_errors if e.startswith(plat_prefix)
-            ]
+            plat_errs = [e for e in ctx.validation_errors if e.startswith(plat_prefix)]
             if plat_errs:
                 failed_errors.extend(plat_errs)
             else:
                 failed_errors.append(f"Validation failed on platform '{p}'")
 
         prev_errors = state.result.errors if state.result else []
-        new_errors = (
-            failed_errors
-            + prev_errors
-            + [f"--- Repair attempt iteration {iteration} ---"]
-        )
+        new_errors = failed_errors + prev_errors + [f"--- Repair attempt iteration {iteration} ---"]
 
         if iteration >= config.MAX_REPAIR_ITERATIONS:
             failed_result = JobResult(
@@ -175,21 +157,15 @@ async def repair_node(state: GraphState) -> GraphState:
                 ticket_id=ctx.ticket_id,
                 status="failed",
                 errors=new_errors,
-                summary=(
-                    f"Max repair iterations ({config.MAX_REPAIR_ITERATIONS}) "
-                    "reached. Validations still failing."
-                ),
+                summary=(f"Max repair iterations ({config.MAX_REPAIR_ITERATIONS}) reached. Validations still failing."),
             )
 
             await send_progress(
                 state,
-                f"Max repair iterations reached. "
-                f"Job failed with platforms unresolved: {failed_plats}",
+                f"Max repair iterations reached. Job failed with platforms unresolved: {failed_plats}",
             )
             # Mark all in-progress SPOQ tasks as blocked in the artifact registry.
-            await _write_repair_state(
-                ctx, state.spoq_tasks, iteration=iteration, blocked=True
-            )
+            await _write_repair_state(ctx, state.spoq_tasks, iteration=iteration, blocked=True)
 
             updated_artifacts = {**state.generated_artifacts}
             if is_spoq:
@@ -202,27 +178,28 @@ async def repair_node(state: GraphState) -> GraphState:
                         "repair_iteration": str(iteration),
                     }
 
-            return state.model_copy(update={
-                "last_node": "repair_agent",
-                "context": ctx.model_copy(update={
-                    "repair_iteration": iteration,
-                    "validation_errors": new_errors,
-                }),
-                "result": failed_result,
-                "done": True,
-                "failed": True,
-                "generated_artifacts": updated_artifacts,
-            })
+            return state.model_copy(
+                update={
+                    "last_node": "repair_agent",
+                    "context": ctx.model_copy(
+                        update={
+                            "repair_iteration": iteration,
+                            "validation_errors": new_errors,
+                        }
+                    ),
+                    "result": failed_result,
+                    "done": True,
+                    "failed": True,
+                    "generated_artifacts": updated_artifacts,
+                }
+            )
 
         await send_progress(
             state,
-            f"Initiating repair retry iteration {iteration} "
-            f"for platforms: {failed_plats}...",
+            f"Initiating repair retry iteration {iteration} for platforms: {failed_plats}...",
         )
         # Advance repair_iteration in the artifact registry.
-        await _write_repair_state(
-            ctx, state.spoq_tasks, iteration=iteration, blocked=False
-        )
+        await _write_repair_state(ctx, state.spoq_tasks, iteration=iteration, blocked=False)
 
         updated_artifacts = {**state.generated_artifacts}
         if is_spoq:
@@ -239,17 +216,21 @@ async def repair_node(state: GraphState) -> GraphState:
         for p in failed_plats:
             updated_failed_platforms[p] = False
 
-        return state.model_copy(update={
-            "last_node": "repair_agent",
-            "context": ctx.model_copy(update={
-                "repair_iteration": iteration,
-                "validation_errors": new_errors,
-            }),
-            "result": None,
-            "failed_platforms": updated_failed_platforms,
-            "done": False,
-            "generated_artifacts": updated_artifacts,
-        })
+        return state.model_copy(
+            update={
+                "last_node": "repair_agent",
+                "context": ctx.model_copy(
+                    update={
+                        "repair_iteration": iteration,
+                        "validation_errors": new_errors,
+                    }
+                ),
+                "result": None,
+                "failed_platforms": updated_failed_platforms,
+                "done": False,
+                "generated_artifacts": updated_artifacts,
+            }
+        )
 
     except Exception as e:
         logger.error("CRITICAL ERROR in repair phase: %s", e)

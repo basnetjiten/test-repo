@@ -11,12 +11,12 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from ebdev.config import config
-from ebdev.models.schemas import SprintTicket, JobContext, GraphState, JobResult
+from ebdev.models.graph_state import GraphState, JobContext, JobResult
+from ebdev.models.ticket import SprintTicket
 
 
 def _discover_space_name() -> str:
     return os.environ.get("SPACE_NAME", "ebmobileapp")
-
 
 
 async def run_test():
@@ -48,7 +48,7 @@ async def run_test():
                 ],
             },
         ],
-        figma_url=None
+        figma_url=None,
     )
 
     # Initialize JobContext running BOTH platforms (sequential stage planning will run api, then flutter)
@@ -63,21 +63,17 @@ async def run_test():
     )
 
     # Initialize initial state
-    initial_state = GraphState(
-        context=context,
-        done=False,
-        failed=False
-    )
+    initial_state = GraphState(context=context, done=False, failed=False)
 
     # Mock OpenCode execution
     def mock_invoke(ctx, progress_callback=None, session_id=None):
         platform = ctx.platform
         agent = ctx.current_agent
         print(f"-> [Mock OpenCode][{platform}] Invoked for agent '{agent}'")
-        
+
         if progress_callback:
             progress_callback(f"Running mock actions for {platform}")
-            
+
         if "plan" in agent:
             # SPOQ mode: tasks enriched in GraphState only (no YAML files)
             if ctx.spoq_epic_dir and ctx.active_task_id:
@@ -95,23 +91,22 @@ async def run_test():
                     f"- src/{platform}_auth: Define handlers and methods\n"
                 )
                 plan_file.write_text(plan_content, encoding="utf-8")
-            
+
             return JobResult(
-                job_id=ctx.ticket_id,
+                task_id=ctx.ticket_id,
                 space_name=ctx.space_name,
                 ticket_id=ctx.ticket_id,
                 status="success",
-                summary=f"Mock plan created for {platform}"
+                summary=f"Mock plan created for {platform}",
             ), f"mock-session-{platform}"
-        else:
-            return JobResult(
-                job_id=ctx.ticket_id,
-                space_name=ctx.space_name,
-                ticket_id=ctx.ticket_id,
-                status="success",
-                summary=f"Code generated successfully for {platform}.",
-                pr_url=f"https://github.com/mock/pr/{platform}"
-            ), f"mock-session-{platform}"
+        return JobResult(
+            task_id=ctx.ticket_id,
+            space_name=ctx.space_name,
+            ticket_id=ctx.ticket_id,
+            status="success",
+            summary=f"Code generated successfully for {platform}.",
+            pr_url=f"https://github.com/mock/pr/{platform}",
+        ), f"mock-session-{platform}"
 
     # Mock GitService run calls
     mock_git_run = MagicMock()
@@ -121,7 +116,7 @@ async def run_test():
     # Mock asyncio subprocess for API platform
     async def mock_communicate():
         return b"mock stdout", b"mock stderr"
-        
+
     mock_process = MagicMock()
     mock_process.communicate = mock_communicate
     mock_process.returncode = 0
@@ -137,14 +132,8 @@ async def run_test():
         return "mock-session-orchestrator"
 
     async def mock_send_prompt_message(self, session_id, agent, prompt, model=None):
-        strategy_data = {
-            "complexity": "low",
-            "execution_mode": "sequential",
-            "mocking_rules": "mock all things"
-        }
-        return {
-            "parts": [{"type": "text", "text": f"```json\n{json.dumps(strategy_data)}\n```"}]
-        }
+        strategy_data = {"complexity": "low", "execution_mode": "sequential", "mocking_rules": "mock all things"}
+        return {"parts": [{"type": "text", "text": f"```json\n{json.dumps(strategy_data)}\n```"}]}
 
     # Patch execution endpoints to bypass real subprocess calls
     patches = [
@@ -166,7 +155,7 @@ async def run_test():
         patch("ebdev.platforms.flutter.FlutterStrategy.bootstrap"),
         patch("ebdev.platforms.api.ApiStrategy.bootstrap"),
         patch("asyncio.create_subprocess_exec", side_effect=mock_create_subprocess),
-        patch("ebdev.core.nodes.publish._create_github_pr", return_value="https://github.com/mock/pr/epic-101")
+        patch("ebdev.core.nodes.publish._create_github_pr", return_value="https://github.com/mock/pr/epic-101"),
     ]
 
     for p in patches:
@@ -179,12 +168,12 @@ async def run_test():
         print("Invoking Graph...")
         thread_config = {"configurable": {"thread_id": "test-thread-epic-101"}}
         final_state = await graph.ainvoke(initial_state, config=thread_config)
-        
+
         print("\n=== CONCURRENT RUN COMPLETE ===")
         print(f"Final State done:   {final_state.get('done')}")
         print(f"Final State failed: {final_state.get('failed')}")
         print(f"Last executed node: {final_state.get('last_node')}")
-        
+
         result = final_state.get("result")
         if result:
             print(f"Final Result Status: {result.status}")

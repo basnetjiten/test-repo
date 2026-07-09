@@ -33,68 +33,195 @@ from typing import Collection, Optional
 # FeatureNameExtractor and override them.
 
 #: Verbs commonly used in ticket / task titles that carry no domain meaning.
-GENERIC_VERBS: Collection[str] = frozenset({
-    "create", "add", "build", "implement", "update", "fix", "remove",
-    "delete", "edit", "manage", "show", "view", "list", "get", "set",
-    "enable", "disable", "integrate", "migrate", "refactor", "optimise",
-    "optimize", "replace", "convert", "handle", "support", "submit",
-})
+GENERIC_VERBS: Collection[str] = frozenset(
+    {
+        "create",
+        "add",
+        "build",
+        "implement",
+        "update",
+        "fix",
+        "remove",
+        "delete",
+        "edit",
+        "manage",
+        "show",
+        "view",
+        "list",
+        "get",
+        "set",
+        "enable",
+        "disable",
+        "integrate",
+        "migrate",
+        "refactor",
+        "optimise",
+        "optimize",
+        "replace",
+        "convert",
+        "handle",
+        "support",
+        "submit",
+    }
+)
 
 #: Generic nouns that describe the *type* of work rather than the domain.
-GENERIC_NOUNS: Collection[str] = frozenset({
-    "feature", "screen", "page", "ui", "flow", "form", "button",
-    "input", "field", "text", "content", "body", "component",
-    "module", "section", "dialog", "modal", "toast", "banner",
-    "header", "footer", "sidebar", "navbar", "bug", "error",
-    "issue", "task", "item", "entry",
-})
+GENERIC_NOUNS: Collection[str] = frozenset(
+    {
+        "feature",
+        "screen",
+        "page",
+        "ui",
+        "flow",
+        "form",
+        "button",
+        "input",
+        "field",
+        "text",
+        "content",
+        "body",
+        "component",
+        "module",
+        "section",
+        "dialog",
+        "modal",
+        "toast",
+        "banner",
+        "header",
+        "footer",
+        "sidebar",
+        "navbar",
+        "bug",
+        "error",
+        "issue",
+        "task",
+        "item",
+        "entry",
+    }
+)
 
 #: UI / presentation terms — stripped only when the task also targets a
 #: backend platform; kept when the task is UI-only so they can form part of
 #: the feature name.
-UI_TERMS: Collection[str] = frozenset({
-    "widget", "card", "tile", "grid", "listview", "scaffold",
-    "appbar", "drawer", "bottom", "sheet", "snackbar",
-    "tab", "tabs", "carousel", "slider", "stepper", "chip",
-})
+UI_TERMS: Collection[str] = frozenset(
+    {
+        "widget",
+        "card",
+        "tile",
+        "grid",
+        "listview",
+        "scaffold",
+        "appbar",
+        "drawer",
+        "bottom",
+        "sheet",
+        "snackbar",
+        "tab",
+        "tabs",
+        "carousel",
+        "slider",
+        "stepper",
+        "chip",
+    }
+)
 
 #: Highly generic English words that never contribute to a feature name.
-FUNCTION_WORDS: Collection[str] = frozenset({
-    "and", "or", "the", "a", "an", "for", "with", "of", "in", "on",
-    "at", "to", "from", "by", "is", "be", "are", "was", "were",
-    "that", "this", "it", "its", "has", "have", "will", "would",
-    "should", "can", "could", "may", "might", "not", "no", "yes",
-    "we", "our", "us", "i", "me", "my", "you", "your", "he", "she",
-    "they", "them", "their",
-})
+FUNCTION_WORDS: Collection[str] = frozenset(
+    {
+        "and",
+        "or",
+        "the",
+        "a",
+        "an",
+        "for",
+        "with",
+        "of",
+        "in",
+        "on",
+        "at",
+        "to",
+        "from",
+        "by",
+        "is",
+        "be",
+        "are",
+        "was",
+        "were",
+        "that",
+        "this",
+        "it",
+        "its",
+        "has",
+        "have",
+        "will",
+        "would",
+        "should",
+        "can",
+        "could",
+        "may",
+        "might",
+        "not",
+        "no",
+        "yes",
+        "we",
+        "our",
+        "us",
+        "i",
+        "me",
+        "my",
+        "you",
+        "your",
+        "he",
+        "she",
+        "they",
+        "them",
+        "their",
+    }
+)
 
 #: Domain nouns that represent common form fields but not business entities.
 #: Stripped during extraction so "enquiry title description" → "enquiry".
-FORM_FIELD_TERMS: Collection[str] = frozenset({
-    "title", "description", "name", "email", "phone", "address",
-    "message", "comment", "note", "status", "type", "category",
-    "tag", "label", "date", "time", "url", "link", "image",
-    "file", "attachment", "value", "key",
-})
+FORM_FIELD_TERMS: Collection[str] = frozenset(
+    {
+        "title",
+        "description",
+        "name",
+        "email",
+        "phone",
+        "address",
+        "message",
+        "comment",
+        "note",
+        "status",
+        "type",
+        "category",
+        "tag",
+        "label",
+        "date",
+        "time",
+        "url",
+        "link",
+        "image",
+        "file",
+        "attachment",
+        "value",
+        "key",
+    }
+)
 
 #: Combined set of all words that should ALWAYS be stripped.
-ALWAYS_STRIP: Collection[str] = (
-    GENERIC_VERBS
-    | GENERIC_NOUNS
-    | FUNCTION_WORDS
-    | FORM_FIELD_TERMS
-)
+ALWAYS_STRIP: Collection[str] = GENERIC_VERBS | GENERIC_NOUNS | FUNCTION_WORDS | FORM_FIELD_TERMS
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 _DEFAULT_FEATURE_FALLBACK: str = "feature"
-_MAX_FEATURE_WORDS: int = 3   # Maximum words to keep in a feature name
+_MAX_FEATURE_WORDS: int = 3  # Maximum words to keep in a feature name
 
 # Regex fragments (compiled lazily)
-_CAMEL_CASE_RE = re.compile(r"(?<!^)(?=[A-Z])")        # camelCase → kebab
-_NON_SLUG_RE = re.compile(r"[^a-z0-9-]")                # strip non-slug chars
-_COLLAPSE_DASHES_RE = re.compile(r"-+")                 # collapse -- to -
+_CAMEL_CASE_RE = re.compile(r"(?<!^)(?=[A-Z])")  # camelCase → kebab
+_NON_SLUG_RE = re.compile(r"[^a-z0-9-]")  # strip non-slug chars
+_COLLAPSE_DASHES_RE = re.compile(r"-+")  # collapse -- to -
 
 
 # ---------------------------------------------------------------------------
@@ -151,7 +278,7 @@ def extract_feature_name(
 
     # Split into word tokens (preserve sequence)
     tokens = re.split(r"[\s_-]+", dash_separated)
-    tokens = [t for t in tokens if t]   # drop empty segments
+    tokens = [t for t in tokens if t]  # drop empty segments
 
     if not tokens:
         return _DEFAULT_FEATURE_FALLBACK
@@ -168,9 +295,7 @@ def extract_feature_name(
     # ---------- 4. Filter ----------
     meaningful: list[str] = []
     for token in tokens:
-        if token in keep_set:
-            meaningful.append(token)
-        elif token not in strip_set:
+        if token in keep_set or token not in strip_set:
             meaningful.append(token)
 
         if len(meaningful) >= max_words:

@@ -17,25 +17,25 @@ Responsibilities
 from __future__ import annotations
 
 import asyncio
-import logging
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ebdev.config import config
+from ebdev.core.logger import get_logger
 from ebdev.core.nodes.common import send_progress
 from ebdev.core.spoq_utils import get_state_active_tasks
-from ebdev.models.schemas import JobResult
+from ebdev.models.graph_state import JobResult
 from ebdev.services import db
 from ebdev.services.opencode import invoke_opencode
 
 if TYPE_CHECKING:
-    from ebdev.models.schemas import GraphState
+    from ebdev.models.graph_state import GraphState
 
 # ---------------------------------------------------------------------------
 # Module-level logger
 # ---------------------------------------------------------------------------
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -81,8 +81,8 @@ async def generate_node(state: GraphState) -> GraphState:
     else:
         tasks_to_generate = [("", p) for p in ctx.platforms]
 
-    platforms = list({p for _, p in tasks_to_generate})
-    repo_path = Path(ctx.repo_path)
+    list({p for _, p in tasks_to_generate})
+    Path(ctx.repo_path)
 
     if state.result and state.result.status == "failed":
         logger.info("Skipping due to plan failure.")
@@ -94,9 +94,7 @@ async def generate_node(state: GraphState) -> GraphState:
     # ------------------------------------------------------------------
     # Async Generation Worker
     # ------------------------------------------------------------------
-    async def generate_single_task_platform(
-        task_id: str, platform: str
-    ) -> tuple[str, str, JobResult, str | None]:
+    async def generate_single_task_platform(task_id: str, platform: str) -> tuple[str, str, JobResult, str | None]:
         task_label = f"[{task_id}:{platform}]" if task_id else f"[{platform}]"
         logger.info("%s Running builder...", task_label)
 
@@ -119,9 +117,7 @@ async def generate_node(state: GraphState) -> GraphState:
 
         # Non-SPOQ plan file verification
         if not is_spoq:
-            task_id_str = (
-                str(ctx.task_id) if getattr(ctx, "task_id", None) else "default"
-            )
+            task_id_str = str(ctx.task_id) if getattr(ctx, "task_id", None) else "default"
             if "-" in task_id_str:
                 parts = task_id_str.rsplit("-", 1)
                 if len(parts) == 2 and parts[1].isdigit():
@@ -137,9 +133,7 @@ async def generate_node(state: GraphState) -> GraphState:
                 file_prefix = ""
 
             plan_file = (
-                ctx.project_storage_dir(config.OPENCODE_PROJECT_DIR)
-                / task_id_dir
-                / f"{file_prefix}plan_{platform}.md"
+                ctx.project_storage_dir(config.OPENCODE_PROJECT_DIR) / task_id_dir / f"{file_prefix}plan_{platform}.md"
             )
 
             if not plan_file.exists():
@@ -148,9 +142,7 @@ async def generate_node(state: GraphState) -> GraphState:
                     space_name=ctx.space_name,
                     ticket_id=ctx.ticket_id,
                     status="failed",
-                    errors=[
-                        f"Plan source {plan_file.name} missing. Planner must succeed first."
-                    ],
+                    errors=[f"Plan source {plan_file.name} missing. Planner must succeed first."],
                 )
                 return task_id, platform, err_result, None
 
@@ -181,33 +173,27 @@ async def generate_node(state: GraphState) -> GraphState:
         if remediation_content:
             updated_shared["repair_journal"] = remediation_content
 
-        plat_ctx = ctx.model_copy(update={
-            "repo_path": str(plat_path),
-            "platform": platform,
-            "active_task_id": active_task_id if is_spoq else None,
-            "current_agent": target_agent,
-            "shared_context": updated_shared,
-        })
+        plat_ctx = ctx.model_copy(
+            update={
+                "repo_path": str(plat_path),
+                "platform": platform,
+                "active_task_id": active_task_id if is_spoq else None,
+                "current_agent": target_agent,
+                "shared_context": updated_shared,
+            }
+        )
 
         session_id_key = f"{ctx.ticket_id}_{platform}"
-        existing_session_id = session_ids.get(platform) or await db.get_session_id(
-            session_id_key
-        )
+        existing_session_id = session_ids.get(platform) or await db.get_session_id(session_id_key)
 
         ticket_id = ctx.ticket.id if ctx.ticket else None
 
-        if (
-            not existing_session_id
-            and label in ("bug", "ui_refine")
-            and ctx.linked_ticket_ids
-        ):
+        if not existing_session_id and label in ("bug", "ui_refine") and ctx.linked_ticket_ids:
             for linked_id in ctx.linked_ticket_ids:
                 linked_session_key = f"{linked_id}_{platform}"
                 existing_session_id = await db.get_session_id(linked_session_key)
                 if not existing_session_id:
-                    existing_session_id = await db.get_session_id_by_jira_id(
-                        linked_session_key
-                    )
+                    existing_session_id = await db.get_session_id_by_jira_id(linked_session_key)
                 if existing_session_id:
                     logger.info(
                         "[%s] Resuming session %r from linked ticket %s",
@@ -220,9 +206,7 @@ async def generate_node(state: GraphState) -> GraphState:
         if not existing_session_id:
             existing_session_id = await db.get_session_id(session_id_key)
             if not existing_session_id and ticket_id:
-                existing_session_id = await db.get_session_id_by_jira_id(
-                    f"{ticket_id}_{platform}"
-                )
+                existing_session_id = await db.get_session_id_by_jira_id(f"{ticket_id}_{platform}")
 
         if existing_session_id:
             logger.info(
@@ -234,9 +218,7 @@ async def generate_node(state: GraphState) -> GraphState:
         loop = asyncio.get_running_loop()
 
         def _on_opencode_progress(msg: str):
-            asyncio.run_coroutine_threadsafe(
-                send_progress(state, f"[{platform}] Builder: {msg}"), loop
-            )
+            asyncio.run_coroutine_threadsafe(send_progress(state, f"[{platform}] Builder: {msg}"), loop)
 
         result, captured_session_id = await asyncio.to_thread(
             invoke_opencode,
@@ -256,9 +238,7 @@ async def generate_node(state: GraphState) -> GraphState:
         return task_id, platform, result, session_id_to_store
 
     try:
-        runs = await asyncio.gather(
-            *[generate_single_task_platform(t, p) for t, p in tasks_to_generate]
-        )
+        runs = await asyncio.gather(*[generate_single_task_platform(t, p) for t, p in tasks_to_generate])
 
         for t, p, res, sid in runs:
             key = f"{t}_{p}" if t else p
@@ -288,9 +268,7 @@ async def generate_node(state: GraphState) -> GraphState:
             flutter_path = ctx.platform_path("flutter")
             graphql_file = flutter_path / "lib" / "graphql" / "schema.graphql"
             if graphql_file.exists():
-                updated_shared_context["graphql_schema"] = graphql_file.read_text(
-                    encoding="utf-8"
-                )
+                updated_shared_context["graphql_schema"] = graphql_file.read_text(encoding="utf-8")
                 logger.info("Captured GraphQL schema from %s", graphql_file.name)
         except Exception as e:
             logger.warning("Failed to check/read GraphQL schema: %s", e)
@@ -299,9 +277,7 @@ async def generate_node(state: GraphState) -> GraphState:
             api_path = ctx.platform_path("api")
             openapi_file = api_path / "swagger.json"
             if openapi_file.exists():
-                updated_shared_context["api_schema"] = openapi_file.read_text(
-                    encoding="utf-8"
-                )
+                updated_shared_context["api_schema"] = openapi_file.read_text(encoding="utf-8")
                 logger.info("Captured OpenAPI JSON spec from %s", openapi_file.name)
         except Exception as e:
             logger.warning("Failed to check/read OpenAPI spec: %s", e)
@@ -314,17 +290,19 @@ async def generate_node(state: GraphState) -> GraphState:
             summary=f"Builders finished. Consolidated status: {overall_status}",
             errors=combined_errors,
             warnings=combined_warnings,
-            pr_url=list(results.values())[0].pr_url if results else None,
+            pr_url=next(iter(results.values())).pr_url if results else None,
         )
 
-        return state.model_copy(update={
-            "last_node": "builder_agent",
-            "result": consolidated_result,
-            "platform_results": {**state.platform_results, **results},
-            "opencode_session_ids": session_ids,
-            "failed_platforms": failed_platforms,
-            "shared_context": updated_shared_context,
-        })
+        return state.model_copy(
+            update={
+                "last_node": "builder_agent",
+                "result": consolidated_result,
+                "platform_results": {**state.platform_results, **results},
+                "opencode_session_ids": session_ids,
+                "failed_platforms": failed_platforms,
+                "shared_context": updated_shared_context,
+            }
+        )
 
     except Exception as e:
         logger.error("CRITICAL ERROR in generation phase: %s", e)

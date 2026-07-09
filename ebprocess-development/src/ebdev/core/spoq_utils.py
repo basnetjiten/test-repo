@@ -12,16 +12,17 @@ so sessions survive restarts.
 
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING
 
+from ebdev.core.logger import get_logger
+
 if TYPE_CHECKING:
-    from ebdev.models.schemas import SPOQTask
+    from ebdev.models.spoq import SPOQTask
 
 # ---------------------------------------------------------------------------
 # Module-level logger
 # ---------------------------------------------------------------------------
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -56,9 +57,7 @@ def get_state_active_tasks(spoq_tasks: list[SPOQTask]) -> list[SPOQTask]:
     return ready_tasks
 
 
-def update_state_task_status(
-    spoq_tasks: list[SPOQTask], task_id: str, status: str
-) -> list[SPOQTask]:
+def update_state_task_status(spoq_tasks: list[SPOQTask], task_id: str, status: str) -> list[SPOQTask]:
     """
     Update status of a specific task in the list and return the updated list.
 

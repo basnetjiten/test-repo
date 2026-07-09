@@ -11,15 +11,15 @@ Responsibilities
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 
+from ebdev.core.logger import get_logger
 from ebdev.platforms.base import PlatformStrategy
 
 # ---------------------------------------------------------------------------
 # Module-level logger
 # ---------------------------------------------------------------------------
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 class WebStrategy(PlatformStrategy):
     """Placeholder strategy handling linter, dependency, and test actions for web client frameworks."""
 
-    async def prepare(self, repo_path: Path, branch_name: str) -> None:
+    async def prepare(self, repo_path: Path, _branch_name: str) -> None:
         """
         Resolve Web project dependencies (placeholder).
 
@@ -59,16 +59,16 @@ class WebStrategy(PlatformStrategy):
         logger.info("Validating Web workspace at %s (No-Op placeholder)", repo_path)
         return []
 
-    async def bootstrap(self, repo_path: Path, starter_type: str) -> None:
+    async def bootstrap(self, _repo_path: Path, _starter_type: str) -> None:
         """
         Bootstrap Web client boilerplate (placeholder).
 
         Parameters
         ----------
-        repo_path : Path
+        _repo_path : Path
             The destination repository directory.
-        starter_type : str
+        _starter_type : str
             The type of starter skeleton to bootstrap.
         """
-        logger.info("Bootstrapping Web workspace at %s (No-Op placeholder)", repo_path)
+        logger.info("Bootstrapping Web workspace (No-Op placeholder)")
         pass

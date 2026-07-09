@@ -14,31 +14,32 @@ Responsibilities
 from __future__ import annotations
 
 import json
-import logging
 import re
-
-from typing import TYPE_CHECKING
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import httpx
 from pydantic import ValidationError
 
 from ebdev.config import config
 from ebdev.core.constants import Agents
+from ebdev.core.logger import get_logger
 from ebdev.core.name_utils import extract_feature_name
 from ebdev.core.nodes.common import send_progress
 from ebdev.core.spoq_map import build_epic_tasks, compute_epic_waves
-from ebdev.models.schemas import OrchestrationStrategy, SPOQMapEpic
+from ebdev.core.throttle import CircuitBreakerOpenError
+from ebdev.models.graph_state import OrchestrationStrategy
+from ebdev.models.spoq import SPOQMapEpic
 from ebdev.services.opencode import OpenCodeAPIClient
 from ebdev.services.prompts import build_orchestrator_prompt
 
 if TYPE_CHECKING:
-    from ebdev.models.schemas import GraphState
+    from ebdev.models.graph_state import GraphState
 
 # ---------------------------------------------------------------------------
 # Module-level logger
 # ---------------------------------------------------------------------------
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -46,7 +47,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 #: Fallback OpenCode server URL if not configured in environmental settings.
-DEFAULT_OPENCODE_SERVER_URL: str = "http://opencode:4096"
+DEFAULT_OPENCODE_SERVER_URL: str = config.OPENCODE_SERVER_DEFAULT_URL
 
 
 # ---------------------------------------------------------------------------
@@ -68,22 +69,22 @@ async def orchestrate_node(state: GraphState) -> GraphState:
     """
     state.last_node = "orchestrate_agent"
     await send_progress(state, "Orchestrating: Analyzing ticket scope, dependencies, and complexity...")
-    
+
     ctx = state.context
     platforms = ctx.platforms
     ticket = ctx.ticket
-    
+
     ticket_id = ticket.id if ticket else ctx.ticket_id
     ticket_title = ticket.title if ticket else ""
     ticket_desc = ticket.description if ticket else ""
     ticket_ac = "\n".join(ticket.acceptance_criteria) if ticket else ""
-    
+
     # 1. Fallback Rule-Based Classifier (highly robust)
     offline_first_detected = any(
         kw in ticket_desc.lower() or kw in ticket_title.lower() or kw in ticket_ac.lower()
         for kw in ["offline", "local storage", "sync", "sqlite", "hive", "drift", "isar", "cache"]
     )
-    
+
     ui_ux_only_detected = any(
         kw in ticket_desc.lower() or kw in ticket_title.lower() or kw in ticket_ac.lower()
         for kw in ["style", "ui", "ux", "color", "theme", "screen", "widget", "font", "padding", "margin"]
@@ -91,25 +92,23 @@ async def orchestrate_node(state: GraphState) -> GraphState:
         kw in ticket_desc.lower() or kw in ticket_title.lower() or kw in ticket_ac.lower()
         for kw in ["api", "endpoint", "backend", "db", "database", "postgres", "sql", "migration"]
     )
-    
+
     # Simple default execution mode based on platform composition
     has_api = "api" in platforms
     default_mode = "spoq" if (has_api and len(platforms) > 1 and not ui_ux_only_detected) else "parallel"
 
     # 2. Rule-Based Fallback (used only when LLM is unavailable or fails)
-    def _derive_mocking_level(tasks, platforms, offline_first: bool) -> str:
+    def _derive_mocking_level(tasks, _platforms, offline_first: bool) -> str:
         """Derive mocking level from task composition when LLM is unavailable."""
         has_api_tasks = any("api" in t.active_platforms for t in tasks)
         has_backend_keywords = any(
             kw in (t.name or "").lower()
             for t in tasks
-            for kw in ["api", "backend", "endpoint", "schema", "database",
-                       "migration", "resolver", "controller"]
+            for kw in ["api", "backend", "endpoint", "schema", "database", "migration", "resolver", "controller"]
         )
-        has_ui_only = all(
-            "api" not in t.active_platforms and "web" not in t.active_platforms
-            for t in tasks
-        ) and any("flutter" in t.active_platforms for t in tasks)
+        has_ui_only = all("api" not in t.active_platforms and "web" not in t.active_platforms for t in tasks) and any(
+            "flutter" in t.active_platforms for t in tasks
+        )
 
         if offline_first:
             return "live"
@@ -132,7 +131,7 @@ async def orchestrate_node(state: GraphState) -> GraphState:
         execution_mode=default_mode,
         mocking_level=fallback_mocking,
         max_repair_iterations=3,
-        reasoning="Rule-based fallback evaluation based on ticket requirements and platform scope."
+        reasoning="Rule-based fallback evaluation based on ticket requirements and platform scope.",
     )
 
     # 3. Determine Strategy — LLM first, fall back to rule-based
@@ -147,7 +146,7 @@ async def orchestrate_node(state: GraphState) -> GraphState:
             if tasks_exist:
                 for t in ctx.ticket.tasks:
                     task_details.append(
-                        f"  - Task {t.id}: \"{t.name}\" "
+                        f'  - Task {t.id}: "{t.name}" '
                         f"(platforms: {', '.join(t.active_platforms)}, "
                         f"estimated: {sum(h.estimatedHour for h in t.hours):.1f}h)"
                     )
@@ -187,15 +186,25 @@ async def orchestrate_node(state: GraphState) -> GraphState:
 
             if data:
                 strategy = OrchestrationStrategy(**data)
-                logger.info("LLM architect strategy: %s (%s complexity, mocking=%s)",
-                             strategy.execution_mode, strategy.complexity, strategy.mocking_level)
-        except (httpx.HTTPError, json.JSONDecodeError, ValidationError, AttributeError, KeyError) as e:
+                logger.info(
+                    "LLM architect strategy: %s (%s complexity, mocking=%s)",
+                    strategy.execution_mode,
+                    strategy.complexity,
+                    strategy.mocking_level,
+                )
+        except (
+            httpx.HTTPError,
+            CircuitBreakerOpenError,
+            json.JSONDecodeError,
+            ValidationError,
+            AttributeError,
+            KeyError,
+        ) as e:
             logger.warning("LLM architect failed, using rule-based strategy: %s", e)
 
     if strategy is None:
         strategy = fallback_strategy
-        logger.info("Using rule-based strategy (mocking=%s, mode=%s)",
-                     strategy.mocking_level, strategy.execution_mode)
+        logger.info("Using rule-based strategy (mocking=%s, mode=%s)", strategy.mocking_level, strategy.execution_mode)
 
     # Log the strategy decision
     logger.info("=== ORCHESTRATION STRATEGY SELECTED ===")
@@ -217,19 +226,23 @@ async def orchestrate_node(state: GraphState) -> GraphState:
     active_epic_tasks: list = []
     if strategy.execution_mode == "spoq":
         derived_epic_id = f"Epic-{ticket_id}" if not str(ticket_id).startswith("Epic-") else str(ticket_id)
-        epic_specs = list(ctx.map_epics) if ctx.map_epics else [
-            SPOQMapEpic(
-                id=derived_epic_id,
-                title=ticket_title or ctx.feature_name or "New Epic",
-                description=ticket_desc or ticket_title or "Program delivery epic.",
-                status="planned",
-                sprint="sprint-1",
-                depends_on=[],
-                platforms=platforms,
-                tasks=list(ctx.ticket.tasks) if ctx.ticket and ctx.ticket.tasks else [],
-                acceptance_criteria=list(ticket.acceptance_criteria) if ticket else [],
-            )
-        ]
+        epic_specs = (
+            list(ctx.map_epics)
+            if ctx.map_epics
+            else [
+                SPOQMapEpic(
+                    id=derived_epic_id,
+                    title=ticket_title or ctx.feature_name or "New Epic",
+                    description=ticket_desc or ticket_title or "Program delivery epic.",
+                    status="planned",
+                    sprint="sprint-1",
+                    depends_on=[],
+                    platforms=platforms,
+                    tasks=list(ctx.ticket.tasks) if ctx.ticket and ctx.ticket.tasks else [],
+                    acceptance_criteria=list(ticket.acceptance_criteria) if ticket else [],
+                )
+            ]
+        )
 
         # Compute ready waves and select the first epic
         waves = compute_epic_waves(epic_specs)
@@ -272,12 +285,14 @@ async def orchestrate_node(state: GraphState) -> GraphState:
             if nouns_found:
                 for noun in nouns_found:
                     has_create = "create" in name_lower
-                    endpoints.append({
-                        "entity": noun,
-                        "task_id": task.id,
-                        "suggested_routes": entity_patterns[noun],
-                        "graphql_mutation": f"create{capitalize_first(noun)}" if has_create else None,
-                    })
+                    endpoints.append(
+                        {
+                            "entity": noun,
+                            "task_id": task.id,
+                            "suggested_routes": entity_patterns[noun],
+                            "graphql_mutation": f"create{capitalize_first(noun)}" if has_create else None,
+                        }
+                    )
             elif "create" in name_lower or "form" in name_lower:
                 entity = "entity"
                 for keyword in ("form", "page", "screen"):
@@ -285,12 +300,14 @@ async def orchestrate_node(state: GraphState) -> GraphState:
                     if idx > 0:
                         entity = name_lower[:idx].strip().replace(" ", "-")
                         break
-                endpoints.append({
-                    "entity": entity,
-                    "task_id": task.id,
-                    "suggested_routes": [f"POST /{entity}"],
-                    "graphql_mutation": f"create{capitalize_first(entity.replace('-', '_'))}",
-                })
+                endpoints.append(
+                    {
+                        "entity": entity,
+                        "task_id": task.id,
+                        "suggested_routes": [f"POST /{entity}"],
+                        "graphql_mutation": f"create{capitalize_first(entity.replace('-', '_'))}",
+                    }
+                )
         return endpoints
 
     derived_endpoints = _derive_expected_endpoints(ctx.ticket.tasks if ctx.ticket and ctx.ticket.tasks else [])
@@ -318,23 +335,31 @@ async def orchestrate_node(state: GraphState) -> GraphState:
                         f"apps/api/src/modules/{feature}/dto/input/create-{feature}.input.ts",
                         f"apps/api/src/i18n/en/{feature}.json",
                         f"apps/api/src/i18n/ne/{feature}.json",
-                    ] if "api" in platforms_in_task else [],
+                    ]
+                    if "api" in platforms_in_task
+                    else [],
                     "flutter": [
                         f"lib/features/{feature}/domain/repositories/{feature}_repository.dart",
                         f"lib/features/{feature}/data/models/{feature}_model.dart",
                         f"lib/features/{feature}/data/sources/{feature}_remote_source.dart",
                         f"lib/features/{feature}/presentation/cubit/{feature}_cubit.dart",
                         f"lib/features/{feature}/presentation/pages/{feature}_page.dart",
-                    ] if "flutter" in platforms_in_task else [],
+                    ]
+                    if "flutter" in platforms_in_task
+                    else [],
                 },
                 "data_access_registrations": [
                     f"libs/data-access/src/index.ts -> export * from './{feature}';",
                     f"libs/data-access/src/data-access.models.ts -> name: {capitalize_first(feature)}.name, schema: {capitalize_first(feature)}Schema",
-                    f"libs/data-access/src/data-access.module.ts -> providers + exports",
-                ] if "api" in platforms_in_task else [],
+                    "libs/data-access/src/data-access.module.ts -> providers + exports",
+                ]
+                if "api" in platforms_in_task
+                else [],
                 "app_module_registrations": [
                     f"apps/api/src/app.module.ts -> import {capitalize_first(feature)}Module + add to imports + GraphQL include",
-                ] if "api" in platforms_in_task else [],
+                ]
+                if "api" in platforms_in_task
+                else [],
             }
 
     primary_feature = ""
@@ -354,20 +379,24 @@ async def orchestrate_node(state: GraphState) -> GraphState:
         "primary_feature_name": primary_feature,
     }
 
-    updated_ctx = ctx.model_copy(update={
-        "mocking_level": strategy.mocking_level,
-        "offline_first": strategy.offline_first,
-        "spoq_epic_dir": active_epic_id,
-        "map_id": map_id,
-        "shared_context": shared_ctx_data,
-        "feature_name": primary_feature or ctx.feature_name,
-    })
+    updated_ctx = ctx.model_copy(
+        update={
+            "mocking_level": strategy.mocking_level,
+            "offline_first": strategy.offline_first,
+            "spoq_epic_dir": active_epic_id,
+            "map_id": map_id,
+            "shared_context": shared_ctx_data,
+            "feature_name": primary_feature or ctx.feature_name,
+        }
+    )
 
-    return state.model_copy(update={
-        "last_node": "orchestrate_agent",
-        "strategy": strategy,
-        "context": updated_ctx,
-        "current_stage": 0,
-        "spoq_tasks": active_epic_tasks,
-        "shared_context": shared_ctx_data
-    })
+    return state.model_copy(
+        update={
+            "last_node": "orchestrate_agent",
+            "strategy": strategy,
+            "context": updated_ctx,
+            "current_stage": 0,
+            "spoq_tasks": active_epic_tasks,
+            "shared_context": shared_ctx_data,
+        }
+    )

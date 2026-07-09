@@ -11,15 +11,15 @@ Responsibilities
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 
+from ebdev.core.logger import get_logger
 from ebdev.platforms.base import PlatformStrategy
 
 # ---------------------------------------------------------------------------
 # Module-level logger
 # ---------------------------------------------------------------------------
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 class CmsStrategy(PlatformStrategy):
     """Placeholder strategy handling linter, dependency, and test actions for CMS platforms."""
 
-    async def prepare(self, repo_path: Path, branch_name: str) -> None:
+    async def prepare(self, repo_path: Path, _branch_name: str) -> None:
         """
         Resolve CMS dependencies (placeholder).
 
@@ -59,7 +59,7 @@ class CmsStrategy(PlatformStrategy):
         logger.info("Validating CMS workspace at %s (No-Op placeholder)", repo_path)
         return []
 
-    async def bootstrap(self, repo_path: Path, starter_type: str) -> None:
+    async def bootstrap(self, repo_path: Path, _starter_type: str) -> None:
         """
         Bootstrap CMS files and directories (placeholder).
 

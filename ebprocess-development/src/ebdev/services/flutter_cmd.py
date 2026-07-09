@@ -13,14 +13,15 @@ Responsibilities
 from __future__ import annotations
 
 import asyncio
-import logging
 import os
 from typing import Optional
+
+from ebdev.core.logger import get_logger
 
 # ---------------------------------------------------------------------------
 # Module-level logger
 # ---------------------------------------------------------------------------
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -195,9 +196,7 @@ async def create(
     return await run_cmd(cmd, cwd=cwd, output=output)
 
 
-async def build_runner(
-    cwd: str, output: Optional[list[str]] = None, timeout: int = 300
-) -> bool:
+async def build_runner(cwd: str, output: Optional[list[str]] = None, timeout: int = 300) -> bool:
     """
     Run `dart run build_runner build --delete-conflicting-outputs`.
 

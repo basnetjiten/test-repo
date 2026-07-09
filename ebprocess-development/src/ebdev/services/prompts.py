@@ -3,12 +3,10 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
-from ebdev.core.constants import Prompts, ErrorMessages
-from ebdev.models.schemas import JobContext
-
+from ebdev.core.constants import ErrorMessages, Prompts
+from ebdev.models.graph_state import JobContext
 
 # ---------------------------------------------------------------------------
 # Platform tech stack registry
@@ -53,30 +51,24 @@ PLATFORM_SKILLS: dict[str, list[str]] = {
         "feature-scaffolder/SKILL.md",
         "api-integration/SKILL.md",
         "state-management/SKILL.md",
-        "ui-generator/SKILL.md"
+        "ui-generator/SKILL.md",
     ],
-    "api": [
-        "nestjs-graphql-resolvers/SKILL.md",
-        "api-integration/SKILL.md"
-    ],
-    "web": [
-        "api-integration/SKILL.md"
-    ]
+    "api": ["nestjs-graphql-resolvers/SKILL.md", "api-integration/SKILL.md"],
+    "web": ["api-integration/SKILL.md"],
 }
 
 PLATFORM_PATH_EXAMPLES: dict[str, str] = {
     "flutter": "lib/main.dart",
     "api": "apps/api/src/main.ts",
     "web": "src/pages/index.tsx",
-    "cms": "src/server.ts"
+    "cms": "src/server.ts",
 }
-
 
 
 def to_container_path(path: Path) -> Path:
     """
     Translate host absolute paths to container-native paths.
-    
+
     Maps host path prefixes to container mounts:
       - /Users/.../workspace/... -> /workspace/...
       - /Users/.../.opencode/...  -> /.opencode/...
@@ -115,7 +107,6 @@ def _legacy_task_paths(storage_dir: Path, task_id: str | int | None, platform: s
     )
 
 
-
 def agent_instructions(job_context: JobContext, storage_dir: Path, platform: str = "") -> str:
     """Return phase-specific instructions for the active agent."""
     agent = job_context.current_agent.lower()
@@ -144,15 +135,16 @@ def agent_instructions(job_context: JobContext, storage_dir: Path, platform: str
 - JOURNAL: You MUST write your detailed evaluation journal to the `journals/` folder in the epic directory.
  - OUTPUT: Output ONLY a single JSON object containing the status, metrics, average, minimum, and a brief ≤20 line remediation instructions if failed. Do not wrap it in markdown fences.
 </{Prompts.INSTRUCTIONS_TAG}>"""
-        else:
-            return f"""<{Prompts.INSTRUCTIONS_TAG}>
+        return f"""<{Prompts.INSTRUCTIONS_TAG}>
 - GOAL: Run standard validation checks on platform {plat}.
 </{Prompts.INSTRUCTIONS_TAG}>"""
 
     # Planner instructions
-    elif "planner" in agent or agent == "plan":
+    if "planner" in agent or agent == "plan":
         skills_list = PLATFORM_SKILLS.get(plat, ["api-integration/SKILL.md"])
-        skills_str = "\n".join([f"  - For {plat.upper()}: " + ", ".join([f"read `/.opencode/skills/{s}`" for s in skills_list])])
+        skills_str = "\n".join(
+            [f"  - For {plat.upper()}: " + ", ".join([f"read `/.opencode/skills/{s}`" for s in skills_list])]
+        )
         if spoq_dir is not None:
             assert plan_path is not None
             return f"""<{Prompts.INSTRUCTIONS_TAG}>
@@ -165,11 +157,10 @@ def agent_instructions(job_context: JobContext, storage_dir: Path, platform: str
   Your plan MUST strictly adopt the exact folder paths, base classes, and structural layers defined in these skills. If your plan fails to use these paths and patterns, you have FAILED.
 - Required Plan Shape: Adopt the exact heading styles, audit tables, and layout sections (Objective, Scope, Technical Audit table, Implementation Steps, Verification) defined in your system instruction. Write every file you will touch in the Technical Audit table.
 </{Prompts.INSTRUCTIONS_TAG}>"""
-        else:
-            context_path, legacy_plan_path = _legacy_task_paths(storage_dir_container, job_context.task_id, plat)
-            assert context_path is not None
-            assert legacy_plan_path is not None
-            return f"""<{Prompts.INSTRUCTIONS_TAG}>
+        context_path, legacy_plan_path = _legacy_task_paths(storage_dir_container, job_context.task_id, plat)
+        assert context_path is not None
+        assert legacy_plan_path is not None
+        return f"""<{Prompts.INSTRUCTIONS_TAG}>
 {Prompts.PHASE_PLANNING}
 - GOAL: Create a comprehensive implementation plan based on the requirements in {context_path}.
 - REQUIREMENT: You MUST save the plan using the `write` tool to the path specified under `Implementation Plan` ({legacy_plan_path}).
@@ -181,7 +172,7 @@ def agent_instructions(job_context: JobContext, storage_dir: Path, platform: str
 </{Prompts.INSTRUCTIONS_TAG}>"""
 
     # Bug fixer instructions
-    elif "bug_fixer" in agent or "bug" in agent:
+    if "bug_fixer" in agent or "bug" in agent:
         ticket = job_context.ticket
         return f"""<{Prompts.INSTRUCTIONS_TAG}>
 {Prompts.PHASE_BUG_FIX}
@@ -189,7 +180,7 @@ def agent_instructions(job_context: JobContext, storage_dir: Path, platform: str
 <BUG_REPORT>
 - Ticket:      {ticket.id}
 - Summary:     {ticket.title}
-- Description: {ticket.description or 'See context.json for details.'}
+- Description: {ticket.description or "See context.json for details."}
 </BUG_REPORT>
 
 <EXECUTION_STEPS>
@@ -205,36 +196,38 @@ def agent_instructions(job_context: JobContext, storage_dir: Path, platform: str
 </{Prompts.INSTRUCTIONS_TAG}>"""
 
     # Builder / Implementer instructions
+    import os
+
+    mock_req = ""
+    if job_context.mocking_level == "mock_repositories":
+        mock_req = "- MOCKING REQUIRED: Isolate network API client calls behind clean repositories. Generate stateful Mock Repository classes with local simulated data to build decoupled, visually interactive screens.\n"
+        if job_context.spoq_epic_dir:
+            repo_path_abs = Path(job_context.repo_path).absolute()
+            rel_spoq = os.path.relpath(Path(job_context.spoq_epic_dir).absolute(), repo_path_abs)
+            mock_req += f"- CONTRACT FIRST: You MUST reference the OpenAPI/data models defined in `{rel_spoq}/tasks/00-contract.yml` (if it exists) to ensure your mock endpoints exactly match the backend contract.\n"
+    elif job_context.mocking_level == "ui_stubs":
+        mock_req = (
+            "- UI STUBS ONLY: Implement visual presentations and UI stubs without full logic/network integration.\n"
+        )
+
+    offline_req = ""
+    if job_context.offline_first:
+        offline_req = "- OFFLINE-FIRST ARCHITECTURE: Enforce local storage as the single source of truth. UI must read from/write to local DB (e.g. Drift/Hive/Isar). Save mutations locally with a 'pending' status and implement queue/sync mechanisms to pull/push server updates.\n"
+
+    repo_path = to_container_path(Path(job_context.repo_path))
+    example_file = PLATFORM_PATH_EXAMPLES.get(plat, "src/index.ts")
+
+    if spoq_dir is not None:
+        assert context_path is not None
+        assert plan_path is not None
+        plan_source = f'Implement the plan found at {plan_path}. If that plan file does not exist, immediately output: {{\\"status\\": \\"error\\", \\"reason\\": \\"Plan file {plan_path} is missing.\\"}} and stop.'
     else:
-        import os
-        mock_req = ""
-        if job_context.mocking_level == "mock_repositories":
-            mock_req = "- MOCKING REQUIRED: Isolate network API client calls behind clean repositories. Generate stateful Mock Repository classes with local simulated data to build decoupled, visually interactive screens.\n"
-            if job_context.spoq_epic_dir:
-                repo_path_abs = Path(job_context.repo_path).absolute()
-                rel_spoq = os.path.relpath(Path(job_context.spoq_epic_dir).absolute(), repo_path_abs)
-                mock_req += f"- CONTRACT FIRST: You MUST reference the OpenAPI/data models defined in `{rel_spoq}/tasks/00-contract.yml` (if it exists) to ensure your mock endpoints exactly match the backend contract.\n"
-        elif job_context.mocking_level == "ui_stubs":
-            mock_req = "- UI STUBS ONLY: Implement visual presentations and UI stubs without full logic/network integration.\n"
+        context_path, legacy_plan_path = _legacy_task_paths(storage_dir_container, job_context.task_id, plat)
+        assert context_path is not None
+        assert legacy_plan_path is not None
+        plan_source = f'Implement the plan found at {legacy_plan_path}. If that plan file does not exist, immediately output: {{\\"status\\": \\"error\\", \\"reason\\": \\"{ErrorMessages.PLAN_MISSING.format(plan_path=legacy_plan_path)}\\"}} and stop.'
 
-        offline_req = ""
-        if job_context.offline_first:
-            offline_req = "- OFFLINE-FIRST ARCHITECTURE: Enforce local storage as the single source of truth. UI must read from/write to local DB (e.g. Drift/Hive/Isar). Save mutations locally with a 'pending' status and implement queue/sync mechanisms to pull/push server updates.\n"
-
-        repo_path = to_container_path(Path(job_context.repo_path))
-        example_file = PLATFORM_PATH_EXAMPLES.get(plat, "src/index.ts")
-
-        if spoq_dir is not None:
-            assert context_path is not None
-            assert plan_path is not None
-            plan_source = f"Implement the plan found at {plan_path}. If that plan file does not exist, immediately output: {{\\\"status\\\": \\\"error\\\", \\\"reason\\\": \\\"Plan file {plan_path} is missing.\\\"}} and stop."
-        else:
-            context_path, legacy_plan_path = _legacy_task_paths(storage_dir_container, job_context.task_id, plat)
-            assert context_path is not None
-            assert legacy_plan_path is not None
-            plan_source = f"Implement the plan found at {legacy_plan_path}. If that plan file does not exist, immediately output: {{\\\"status\\\": \\\"error\\\", \\\"reason\\\": \\\"{ErrorMessages.PLAN_MISSING.format(plan_path=legacy_plan_path)}\\\"}} and stop."
-
-        return f"""<{Prompts.INSTRUCTIONS_TAG}>
+    return f"""<{Prompts.INSTRUCTIONS_TAG}>
 {Prompts.PHASE_IMPLEMENTATION}
 
 <REQUIREMENTS>

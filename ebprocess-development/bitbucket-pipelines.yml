@@ -1,0 +1,19 @@
+image: python:3.13
+
+pipelines:
+  default:
+    - step:
+        name: Lint & Test
+        max-time: 15
+        caches:
+          - uv
+        script:
+          - pip install uv
+          - uv sync --frozen
+          - uv run ruff check src/
+          - uv run ruff format --check src/
+          - uv run pytest tests/ -v --tb=short
+        artifacts: []
+definitions:
+  caches:
+    uv: /root/.cache/uv

@@ -17,25 +17,25 @@ Responsibilities
 from __future__ import annotations
 
 import asyncio
-import logging
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ebdev.config import config
 from ebdev.core.exceptions import GitServiceError
+from ebdev.core.logger import get_logger
 from ebdev.core.name_utils import extract_feature_name, sanitize_branch_name
 from ebdev.core.nodes.common import send_progress
 from ebdev.platforms import get_platform_strategy
 from ebdev.services.git import GitConflictError, GitService, RemoteRepoService
 
 if TYPE_CHECKING:
-    from ebdev.models.schemas import GraphState
+    from ebdev.models.graph_state import GraphState
 
 # ---------------------------------------------------------------------------
 # Module-level logger
 # ---------------------------------------------------------------------------
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -157,24 +157,23 @@ async def prepare_node(state: GraphState) -> GraphState:
         await asyncio.gather(*[prepare_single_platform(p) for p in platforms])
 
     except Exception as e:
-        err = f"Concurrent preparation phase failed: {str(e)}"
+        err = f"Concurrent preparation phase failed: {e!s}"
         logger.error(err)
         raise GitServiceError(err) from e
 
     # Update state context values
     sanitized_feature_slug = extract_feature_name(ctx.feature_name or ctx.ticket.title)
-    updated_ctx = ctx.model_copy(update={
-        "repo_path": str(repo_path),
-        "generated_branch": f"feature/{ctx.ticket.id}-{sanitize_branch_name(ctx.feature_name or ctx.ticket.title)}",
-        "feature_name": sanitized_feature_slug
-    })
+    updated_ctx = ctx.model_copy(
+        update={
+            "repo_path": str(repo_path),
+            "generated_branch": f"feature/{ctx.ticket.id}-{sanitize_branch_name(ctx.feature_name or ctx.ticket.title)}",
+            "feature_name": sanitized_feature_slug,
+        }
+    )
 
     logger.info("All platforms successfully prepared.")
     await send_progress(state, "All platform workspaces successfully prepared.")
-    return state.model_copy(update={
-        "last_node": "prepare",
-        "context": updated_ctx
-    })
+    return state.model_copy(update={"last_node": "prepare", "context": updated_ctx})
 
 
 async def _refactor_flutter_project(plat_path: Path, new_package_name: str) -> None:
@@ -208,10 +207,7 @@ async def _refactor_flutter_project(plat_path: Path, new_package_name: str) -> N
     build_yaml_path = plat_path / "build.yaml"
     if build_yaml_path.exists():
         build_content = build_yaml_path.read_text(encoding="utf-8")
-        updated_build = build_content.replace(
-            f"schema: {old_package_name}|",
-            f"schema: {new_package_name}|"
-        )
+        updated_build = build_content.replace(f"schema: {old_package_name}|", f"schema: {new_package_name}|")
         if updated_build != build_content:
             build_yaml_path.write_text(updated_build, encoding="utf-8")
             logger.info("Updated build.yaml schema references from %r to %r", old_package_name, new_package_name)
@@ -238,4 +234,3 @@ async def _refactor_flutter_project(plat_path: Path, new_package_name: str) -> N
                 logger.warning("Failed to refactor imports in file %s: %s", file_path, e)
 
     logger.info("Successfully refactored %d Dart file(s) with new import prefix.", refactored_count)
-

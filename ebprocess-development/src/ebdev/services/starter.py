@@ -12,16 +12,16 @@ Responsibilities
 
 from __future__ import annotations
 
-import logging
 import shutil
 from pathlib import Path
 
+from ebdev.core.logger import get_logger
 from ebdev.services import flutter_cmd
 
 # ---------------------------------------------------------------------------
 # Module-level logger
 # ---------------------------------------------------------------------------
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------

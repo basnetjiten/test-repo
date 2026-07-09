@@ -12,12 +12,14 @@ MemorySaver / PostgresSaver).
 
 from __future__ import annotations
 
-import logging
+from collections import deque
 from typing import Sequence
 
-from ebdev.models.schemas import EpicTask, SPOQMapEpic, SPOQTask
+from ebdev.core.logger import get_logger
+from ebdev.models.spoq import SPOQMapEpic, SPOQTask
+from ebdev.models.ticket import EpicTask
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -56,41 +58,42 @@ def compute_epic_waves(epics: Sequence[SPOQMapEpic]) -> list[list[str]]:
     ValueError
         If a cycle is detected or an epic depends on an unknown target.
     """
-    epic_ids = [epic.id for epic in epics]
     epic_lookup = {epic.id: epic for epic in epics}
 
+    # Validate all dependencies and build reverse adjacency in one pass — O(V+E).
     indegree: dict[str, int] = {}
+    dependants: dict[str, list[str]] = {epic.id: [] for epic in epics}
     for epic in epics:
         missing = [dep for dep in epic.depends_on if dep not in epic_lookup]
         if missing:
-            raise ValueError(
-                f"Epic {epic.id} depends on unknown epics: {missing}"
-            )
+            raise ValueError(f"Epic {epic.id} depends on unknown epics: {missing}")
         indegree[epic.id] = len(epic.depends_on)
+        for dep in epic.depends_on:
+            dependants[dep].append(epic.id)
 
+    # Seed queue with all zero-indegree nodes — avoids O(V) scan per wave.
+    queue: deque[str] = deque(eid for eid, deg in indegree.items() if deg == 0)
+    total = len(epic_lookup)
+    processed = 0
     waves: list[list[str]] = []
-    assigned: set[str] = set()
 
-    while len(assigned) < len(epic_ids):
-        ready = [
-            epic_id
-            for epic_id in epic_ids
-            if epic_id not in assigned and indegree.get(epic_id, 0) == 0
-        ]
-        if not ready:
-            remaining = set(epic_ids) - assigned
-            raise ValueError(
-                f"Cycle detected or unreachable epics in SPOQ map: {sorted(remaining)}"
-            )
+    while queue:
+        # Drain the entire current wave in one pass.
+        wave_size = len(queue)
+        wave: list[str] = []
+        for _ in range(wave_size):
+            epic_id = queue.popleft()
+            wave.append(epic_id)
+            processed += 1
+            for child_id in dependants[epic_id]:
+                indegree[child_id] -= 1
+                if indegree[child_id] == 0:
+                    queue.append(child_id)
+        waves.append(wave)
 
-        waves.append(ready)
-        for epic_id in ready:
-            assigned.add(epic_id)
-            for other in epics:
-                if epic_id in other.depends_on:
-                    indegree[other.id] = max(
-                        0, indegree.get(other.id, 0) - 1
-                    )
+    if processed != total:
+        remaining = {eid for eid, deg in indegree.items() if deg > 0}
+        raise ValueError(f"Cycle detected or unreachable epics in SPOQ map: {sorted(remaining)}")
 
     return waves
 
@@ -117,38 +120,44 @@ def compute_waves_from_tasks(tasks: Sequence[SPOQTask]) -> list[list[str]]:
     if not tasks:
         return []
 
-    tasks_by_id = {task.id: task for task in tasks}
-    indegree = {task.id: len(task.dependencies) for task in tasks}
+    # Build reverse adjacency in one pass — O(V+E).
+    dependants: dict[str, list[str]] = {task.id: [] for task in tasks}
+    indegree: dict[str, int] = {task.id: 0 for task in tasks}
+    for task in tasks:
+        for dep_id in task.dependencies:
+            if dep_id not in dependants:
+                # External dependency already satisfied — skip.
+                continue
+            dependants[dep_id].append(task.id)
+            indegree[task.id] += 1
+
+    # Seed queue — no O(V) scan per wave.
+    queue: deque[str] = deque(tid for tid, deg in indegree.items() if deg == 0)
+    total = len(indegree)
+    processed = 0
     waves: list[list[str]] = []
-    assigned: set[str] = set()
 
-    while len(assigned) < len(tasks_by_id):
-        ready = [
-            task_id
-            for task_id in tasks_by_id
-            if task_id not in assigned and indegree.get(task_id, 0) == 0
-        ]
-        if not ready:
-            remaining = set(tasks_by_id.keys()) - assigned
-            raise ValueError(
-                f"Cycle detected or unreachable tasks in epic DAG: {sorted(remaining)}"
-            )
+    while queue:
+        wave_size = len(queue)
+        wave: list[str] = []
+        for _ in range(wave_size):
+            task_id = queue.popleft()
+            wave.append(task_id)
+            processed += 1
+            for child_id in dependants[task_id]:
+                indegree[child_id] -= 1
+                if indegree[child_id] == 0:
+                    queue.append(child_id)
+        waves.append(wave)
 
-        waves.append(ready)
-        for task_id in ready:
-            assigned.add(task_id)
-            for task in tasks:
-                if task_id in task.dependencies:
-                    indegree[task.id] = max(
-                        0, indegree.get(task.id, 0) - 1
-                    )
+    if processed != total:
+        remaining = {tid for tid, deg in indegree.items() if deg > 0}
+        raise ValueError(f"Cycle detected or unreachable tasks in epic DAG: {sorted(remaining)}")
 
     return waves
 
 
-def build_epic_tasks(
-    epic: SPOQMapEpic, mocking_level: str = "live"
-) -> list[SPOQTask]:
+def build_epic_tasks(epic: SPOQMapEpic, mocking_level: str = "live") -> list[SPOQTask]:
     """
     Convert a program-level epic into task definitions (in-memory, no files).
 
@@ -179,9 +188,7 @@ def build_epic_tasks(
                 status="pending",
                 phase=0,
                 dependencies=[],
-                skills_required=(
-                    ["api"] if "api" in active_platforms else []
-                ),
+                skills_required=(["api"] if "api" in active_platforms else []),
                 outputs=["OpenAPI YAML", "Database schema models"],
             )
         )
@@ -257,17 +264,19 @@ def build_epic_tasks(
                 )
             )
 
-    # Recalculate correct wave phases topologically
+    # Recalculate correct wave phases topologically — O(T) dict lookup, not O(T²) scan.
     try:
         waves = compute_waves_from_tasks(tasks)
-        for phase_index, wave in enumerate(waves):
-            for task_id in wave:
-                for t in tasks:
-                    if t.id == task_id:
-                        t.phase = phase_index
+        phase_map: dict[str, int] = {
+            task_id: phase_index
+            for phase_index, wave in enumerate(waves)
+            for task_id in wave
+        }
+        tasks = [
+            t.model_copy(update={"phase": phase_map[t.id]}) if t.id in phase_map else t
+            for t in tasks
+        ]
     except ValueError as e:
-        logger.error(
-            "Failed to compute topological wave assignments: %s", e
-        )
+        logger.error("Failed to compute topological wave assignments: %s", e)
 
     return tasks

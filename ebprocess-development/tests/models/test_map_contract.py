@@ -9,7 +9,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from ebdev.core.spoq_map import build_epic_tasks, compute_epic_waves
-from ebdev.models.schemas import EpicTask, SPOQMapEpic
+from ebdev.models.spoq import SPOQMapEpic
+from ebdev.models.ticket import EpicTask
 
 
 def main() -> None:
@@ -65,8 +66,7 @@ def main() -> None:
 
     spoq_tasks = build_epic_tasks(epic_task)
     assert len(spoq_tasks) >= 3, (
-        f"Expected at least 3 tasks (contract + api-impl + flutter-impl), "
-        f"got {len(spoq_tasks)}"
+        f"Expected at least 3 tasks (contract + api-impl + flutter-impl), got {len(spoq_tasks)}"
     )
 
     # Verify dependency chain: contract -> api-impl -> flutter-impl
@@ -78,9 +78,7 @@ def main() -> None:
     assert contract_task.status == "pending"
     assert contract_task.dependencies == []
 
-    assert api_task.dependencies == [contract_task.id], (
-        "API impl should depend on contract"
-    )
+    assert api_task.dependencies == [contract_task.id], "API impl should depend on contract"
     assert flutter_task.dependencies == [contract_task.id, api_task.id], (
         "Flutter impl should depend on contract + API impl"
     )

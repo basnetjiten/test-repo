@@ -14,17 +14,17 @@ Responsibilities
 from __future__ import annotations
 
 import asyncio
-import logging
 import shutil
 from pathlib import Path
 
 from ebdev.core.exceptions import PlatformStrategyError
+from ebdev.core.logger import get_logger
 from ebdev.platforms.base import PlatformStrategy
 
 # ---------------------------------------------------------------------------
 # Module-level logger
 # ---------------------------------------------------------------------------
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -50,6 +50,7 @@ class ApiStrategy(PlatformStrategy):
             A tuple containing return code, stdout bytes, and stderr bytes.
         """
         import os
+
         env = os.environ.copy()
         env["ESLINT_USE_FLAT_CONFIG"] = "false"
         proc = await asyncio.create_subprocess_exec(
@@ -62,7 +63,7 @@ class ApiStrategy(PlatformStrategy):
         stdout, stderr = await proc.communicate()
         return proc.returncode if proc.returncode is not None else -1, stdout, stderr
 
-    async def prepare(self, repo_path: Path, branch_name: str) -> None:
+    async def prepare(self, repo_path: Path, _branch_name: str) -> None:
         """
         Install package/repository dependencies.
 
@@ -85,7 +86,9 @@ class ApiStrategy(PlatformStrategy):
                 try:
                     content = eslint_flat_config.read_text(encoding="utf-8")
                     if "module.exports = {" in content and "parser:" in content:
-                        logger.info("Detected legacy config format inside eslint.config.js. Re-writing with valid flat configuration...")
+                        logger.info(
+                            "Detected legacy config format inside eslint.config.js. Re-writing with valid flat configuration..."
+                        )
                         valid_flat_config = (
                             "const tsParser = require('@typescript-eslint/parser');\n\n"
                             "module.exports = [\n"
@@ -111,12 +114,15 @@ class ApiStrategy(PlatformStrategy):
             # Node / NestJS
             logger.info("Detected NestJS/Node project. Installing node modules...")
             # Try npm install
-            returncode, _, stderr = await self._run_command(["npm", "install", "--legacy-peer-deps", "--engine-strict=false"], repo_path)
+            returncode, _, stderr = await self._run_command(
+                ["npm", "install", "--legacy-peer-deps", "--engine-strict=false"], repo_path
+            )
             if returncode != 0:
                 logger.warning("npm install failed: %s", stderr.decode().strip())
             else:
                 # Compile/build the project to ensure everything is initialized and compile-checked
                 import json
+
                 try:
                     with open(package_json, "r", encoding="utf-8") as f:
                         pkg_data = json.load(f)
@@ -136,17 +142,13 @@ class ApiStrategy(PlatformStrategy):
         elif req_txt.exists():
             # Python requirements.txt
             logger.info("Detected Python (requirements.txt) project. Installing dependencies...")
-            returncode, _, stderr = await self._run_command(
-                ["pip", "install", "-r", "requirements.txt"], repo_path
-            )
+            returncode, _, stderr = await self._run_command(["pip", "install", "-r", "requirements.txt"], repo_path)
             if returncode != 0:
                 logger.warning("pip install requirements failed: %s", stderr.decode().strip())
         elif pyproj.exists():
             # Python pyproject.toml
             logger.info("Detected Python (pyproject.toml) project. Installing editable package...")
-            returncode, _, stderr = await self._run_command(
-                ["pip", "install", "-e", "."], repo_path
-            )
+            returncode, _, stderr = await self._run_command(["pip", "install", "-e", "."], repo_path)
             if returncode != 0:
                 logger.warning("pip install editable package failed: %s", stderr.decode().strip())
 
@@ -171,8 +173,7 @@ class ApiStrategy(PlatformStrategy):
         if package_json.exists():
             # Node / NestJS validation
             lint_ok = True
-            test_ok = True
-            
+
             # Get list of modified and untracked TS files
             logger.info("Identifying modified and untracked TypeScript files in API workspace...")
             rc, stdout, stderr = await self._run_command(["git", "status", "--porcelain"], repo_path)
@@ -181,7 +182,7 @@ class ApiStrategy(PlatformStrategy):
                 for line in stdout.decode("utf-8").splitlines():
                     parts = line.strip().split(None, 1)
                     if len(parts) == 2:
-                        status, filepath = parts
+                        _status, filepath = parts
                         filepath = filepath.strip()
                         # If it is a directory, find all .ts files under it recursively
                         full_path = repo_path / filepath
@@ -195,9 +196,9 @@ class ApiStrategy(PlatformStrategy):
                 logger.info("Running NestJS linting on %d modified files...", len(changed_files))
                 # Run eslint only on the changed files
                 # Using npx eslint with legacy config fallback environment variable
-                cmd = ["npx", "eslint", "--fix"] + changed_files
+                cmd = ["npx", "eslint", "--fix", *changed_files]
                 returncode, out, err = await self._run_command(cmd, repo_path)
-                
+
                 # Check for ESLint warnings/errors and collect only line messages
                 lint_output = out.decode("utf-8", errors="replace") + err.decode("utf-8", errors="replace")
                 if "error" in lint_output.lower() or returncode != 0:
@@ -214,6 +215,7 @@ class ApiStrategy(PlatformStrategy):
             # Test suite verification on NestJS if tests exist
             test_target = ""
             import json
+
             try:
                 with open(package_json, "r", encoding="utf-8") as f:
                     pkg_data = json.load(f)
@@ -235,9 +237,10 @@ class ApiStrategy(PlatformStrategy):
 
             if test_target:
                 logger.info("Running NestJS tests target: %s...", test_target)
-                returncode, _, err = await self._run_command(["npm", "run", "test", "--", test_target, "--passWithNoTests"], repo_path)
+                returncode, _, err = await self._run_command(
+                    ["npm", "run", "test", "--", test_target, "--passWithNoTests"], repo_path
+                )
                 if returncode != 0:
-                    test_ok = False
                     errors.append(f"NestJS tests failed on target '{test_target}': {err.decode().strip()}")
             else:
                 logger.info("Skipping NestJS tests run...")
@@ -251,20 +254,19 @@ class ApiStrategy(PlatformStrategy):
                     lint_tool = tool
                     cmd = [tool, "check", "."] if tool == "ruff" else [tool, "."]
                     returncode, _, stderr = await self._run_command(cmd, repo_path)
-                    lint_ok = (returncode == 0)
+                    lint_ok = returncode == 0
                     if not lint_ok:
                         logger.warning("API Linting with %s failed: %s", tool, stderr.decode().strip())
                     break
 
             # Skip Python test running for now as requested
-            test_ok = True
 
             if not lint_ok:
                 errors.append(f"API Linting failed using {lint_tool or 'linter'}.")
 
         return errors
 
-    async def bootstrap(self, repo_path: Path, starter_type: str) -> None:
+    async def bootstrap(self, repo_path: Path, starter_type: str) -> None:  # noqa: ARG002
         """
         Seed API project files. Not implemented on this platform strategy.
 

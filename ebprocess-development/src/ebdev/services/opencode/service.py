@@ -1,301 +1,42 @@
 # -*- coding: utf-8 -*-
 """
-opencode.py
-===========
-OpenCode deepagent HTTP API runner and orchestrator for ebprocess-development.
-
-Responsibilities
-----------------
-* Client wrapper for communication with the headless OpenCode deepagent server.
-* Orchestrate execution context, prompts, and deepagent APIs.
-* Stream and capture real-time Server-Sent Events (SSE) from the deepagent engine.
+service.py
+==========
+Orchestration service coordinating execution context, prompts and deepagent APIs.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-import logging
-import re
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from urllib.parse import quote
-from typing import TYPE_CHECKING, Any, AsyncGenerator, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 import httpx
 from pydantic import ValidationError
 
 from ebdev.config import config
-from ebdev.core.constants import Agents, RegexPatterns
-from ebdev.models.schemas import JobResult
+from ebdev.core.constants import Agents
+from ebdev.core.logger import get_logger
+from ebdev.core.throttle import CircuitBreakerOpenError
+from ebdev.models.graph_state import JobResult
 from ebdev.services import prompts
+from ebdev.services.opencode.client import (
+    DEFAULT_OPENCODE_SERVER_URL,
+    OpenCodeAPIClient,
+    extract_figma_url,
+    extract_json_block,
+)
 from ebdev.services.prompts import to_container_path
 
 if TYPE_CHECKING:
-    from ebdev.models.schemas import JobContext
+    from ebdev.models.graph_state import JobContext
 
 # ---------------------------------------------------------------------------
 # Module-level logger
 # ---------------------------------------------------------------------------
-logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
-#: Fallback OpenCode server URL if not configured in environmental settings.
-DEFAULT_OPENCODE_SERVER_URL: str = "http://opencode:4096"
-
-
-# ---------------------------------------------------------------------------
-# Internal Helpers
-# ---------------------------------------------------------------------------
-def extract_figma_url(description: str) -> str | None:
-    """
-    Return the first Figma design URL found in the description, or None.
-
-    Parameters
-    ----------
-    description : str
-        The text containing potential Figma design URLs.
-
-    Returns
-    -------
-    str | None
-        The URL string if found, or None.
-    """
-    if not description:
-        return None
-    match = re.search(RegexPatterns.FIGMA_URL, description)
-    return match.group(0) if match else None
-
-
-def extract_json_block(text: str, task_id: str) -> dict | None:
-    """
-    Parse the final message text to extract the agent's JobResult JSON structure.
-
-    Parameters
-    ----------
-    text : str
-        The raw reply text from the agent.
-    task_id : str
-        The job or ticket ID to match within the JSON.
-
-    Returns
-    -------
-    dict | None
-        Parsed result dictionary if successfully extracted and validated, or None.
-    """
-    if not text:
-        return None
-
-    candidate = text.strip()
-
-    # Strategy 0: Accept a raw JSON object response first.
-    try:
-        data = json.loads(candidate)
-        if isinstance(data, dict) and (
-            data.get("task_id") == task_id
-            or data.get("ticket_id") == task_id
-            or data.get("jira_id") == task_id
-            or data.get("job_id") == task_id
-        ):
-            return data
-    except (json.JSONDecodeError, TypeError):
-        pass
-
-    # Strategy 1: Look for standard markdown ```json blocks
-    json_match = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
-    if json_match:
-        try:
-            data = json.loads(json_match.group(1))
-            if isinstance(data, dict) and (data.get("task_id") == task_id or data.get("ticket_id") == task_id or data.get("jira_id") == task_id or data.get("job_id") == task_id):
-                return data
-        except (json.JSONDecodeError, TypeError):
-            pass
-
-    # Strategy 2: Fallback to scanning for raw outer-braces { ... }
-    try:
-        start_idx = text.find("{")
-        end_idx = text.rfind("}")
-        if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
-            data = json.loads(text[start_idx:end_idx + 1])
-            if isinstance(data, dict) and (data.get("task_id") == task_id or data.get("ticket_id") == task_id or data.get("jira_id") == task_id or data.get("job_id") == task_id):
-                return data
-    except (json.JSONDecodeError, TypeError):
-        pass
-
-    return None
-
-
-# ---------------------------------------------------------------------------
-# Model resolution helpers
-# ---------------------------------------------------------------------------
-
-
-def _build_model_payload(model: str | dict[str, Any] | None) -> dict[str, str] | None:
-    """
-    Resolve a model string or dict into an OpenCode ``{providerID, modelID}`` payload.
-
-    Parameters
-    ----------
-    model : str | dict | None
-        The model configuration. If a string with a ``/`` separator, the prefix
-        is used as the providerID directly (e.g. ``"openai/gpt-4o"``). If a plain
-        string without a slash, it cannot be resolved and returns ``None``. If a
-        ``dict``, it is returned unchanged. ``None`` returns ``None``.
-
-    Returns
-    -------
-    dict[str, str] | None
-        A ``{"providerID": ..., "modelID": ...}`` dict, or ``None`` if unresolvable.
-    """
-    if not model:
-        return None
-
-    if isinstance(model, dict):
-        return model  # type: ignore[return-value]
-
-    model_str = model.strip()
-
-    # Explicit provider/model notation takes priority (e.g. "anthropic/claude-sonnet-4-5")
-    if "/" in model_str:
-        provider_id, model_id = model_str.split("/", 1)
-        return {"providerID": provider_id, "modelID": model_id}
-
-    logger.warning(
-        "Could not resolve provider ID for model '%s'. "
-        "Omitting model to use server default. "
-        "Use 'provider/model' format (e.g. 'anthropic/claude-sonnet-4-5') to be explicit.",
-        model_str,
-    )
-    return None
-
-
-# ---------------------------------------------------------------------------
-# API Client
-# ---------------------------------------------------------------------------
-class OpenCodeAPIClient:
-    """Client wrapper for communication with the headless OpenCode deepagent server."""
-
-    def __init__(self, base_url: str, api_key: str | None = None, directory: str | None = None):
-        """
-        Initialize the OpenCode API client.
-
-        Parameters
-        ----------
-        base_url : str
-            The base URL of the OpenCode server.
-        api_key : str | None
-            Optional API authorization token.
-        directory : str | None
-            Project directory used to scope OpenCode requests.
-        """
-        self.base_url = base_url.rstrip("/")
-        self.headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-        self.directory = directory
-
-    def _params(self) -> dict[str, str] | None:
-        """Return request query parameters for the configured project directory."""
-        if not self.directory:
-            return None
-        return {"directory": self.directory}
-
-    async def check_health(self) -> dict:
-        """
-        Fetch endpoint connectivity and engine verification health status.
-
-        Returns
-        -------
-        dict
-            Health check JSON data.
-        """
-        async with httpx.AsyncClient() as client:
-            res = await client.get(f"{self.base_url}/global/health", headers=self.headers, params=self._params())
-            res.raise_for_status()
-            return res.json()
-
-    async def create_session(self, title: str | None = None) -> str:
-        """
-        Create a new agent session on the server.
-
-        Parameters
-        ----------
-        title : str | None
-            Optional description title for the session.
-
-        Returns
-        -------
-        str
-            The created session ID.
-        """
-        async with httpx.AsyncClient() as client:
-            payload = {"title": title} if title else {}
-            headers = {**self.headers}
-            if self.directory:
-                headers["x-opencode-directory"] = quote(self.directory, safe="")
-            res = await client.post(f"{self.base_url}/session", json=payload, headers=headers, params=self._params())
-            res.raise_for_status()
-            return res.json()["id"]
-
-    async def send_prompt_message(
-        self, session_id: str, agent: str, prompt: str, model: str | dict[str, Any] | None = None
-    ) -> dict:
-        """
-        Post prompt instruction message to execution session and await output.
-
-        Parameters
-        ----------
-        session_id : str
-            The target execution session token.
-        agent : str
-            The agent role name to dispatch.
-        prompt : str
-            The prompt message instructions.
-        model : str | dict[str, Any] | None
-            Optional LLM model override name or model configuration object.
-
-        Returns
-        -------
-        dict
-            The raw JSON response dictionary.
-        """
-        payload: dict[str, Any] = {
-            "agent": agent,
-            "parts": [{"type": "text", "text": prompt}],
-        }
-        resolved_model = _build_model_payload(model)
-        if resolved_model:
-            payload["model"] = resolved_model
-
-        async with httpx.AsyncClient(timeout=None) as client:
-            res = await client.post(
-                f"{self.base_url}/session/{session_id}/message",
-                json=payload,
-                headers=self.headers,
-                params=self._params(),
-            )
-            res.raise_for_status()
-            return res.json()
-
-    async def stream_events(self) -> AsyncGenerator[dict[str, Any], None]:
-        """
-        Stream real-time server-sent events (SSE).
-
-        Yields
-        ------
-        dict[str, Any]
-            The parsed SSE event payload.
-        """
-        async with httpx.AsyncClient(timeout=None) as client:
-            async with client.stream("GET", f"{self.base_url}/event", headers=self.headers, params=self._params()) as stream:
-                async for line in stream.aiter_lines():
-                    if line.startswith("data:"):
-                        try:
-                            yield json.loads(line[5:])
-                        except json.JSONDecodeError:
-                            pass
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -342,7 +83,7 @@ class OpenCodeService:
         else:
             task_id_dir = task_id_str
             file_prefix = ""
-            
+
         if job_context.spoq_epic_dir:
             # SPOQ mode: store context in project storage under an epic-specific subdirectory
             epic_safe = job_context.spoq_epic_dir.replace("/", "_").replace("\\", "_")
@@ -360,7 +101,9 @@ class OpenCodeService:
         serializable_context = job_context.model_copy(
             update={
                 "repo_path": str(to_container_path(Path(job_context.repo_path))),
-                "spoq_epic_dir": str(to_container_path(Path(job_context.spoq_epic_dir))) if job_context.spoq_epic_dir else None,
+                "spoq_epic_dir": str(to_container_path(Path(job_context.spoq_epic_dir)))
+                if job_context.spoq_epic_dir
+                else None,
             }
         )
         ctx_file.write_text(serializable_context.model_dump_json(indent=2, exclude_none=True), encoding="utf-8")
@@ -371,9 +114,9 @@ class OpenCodeService:
         """Resolve generic platform task intent to specific agent identifier keys."""
         phase_map = {
             "flutter": {"plan": Agents.FLUTTER_PLANNER, "build": Agents.FLUTTER_BUILDER},
-            "api": {"plan": "api_planner", "build": "api_builder"},
-            "web": {"plan": "web_planner", "build": "web_builder"},
-            "cms": {"plan": "cms_planner", "build": "cms_builder"},
+            "api": {"plan": Agents.API_PLANNER, "build":Agents.API_BUILDER},
+            "web": {"plan": Agents.WEB_PLANNER, "build": Agents.WEB_BUILDER},
+            "cms": {"plan": Agents.CMS_PLANNER, "build": Agents.CMS_BUILDER},
         }
         agent_key = job_context.current_agent
         return phase_map.get(job_context.platform, {}).get(agent_key, agent_key)
@@ -413,14 +156,16 @@ class OpenCodeService:
         prompt = prompts.build_prompt(job_context, storage_dir=storage_dir, session_id=session_id, platform=platform)
 
         server_url = config.OPENCODE_SERVER_URL or DEFAULT_OPENCODE_SERVER_URL
-        directory = str(to_container_path(Path(job_context.repo_path or Path(config.WORKSPACE_DIR) / job_context.space_name)))
+        directory = str(
+            to_container_path(Path(job_context.repo_path or Path(config.WORKSPACE_DIR) / job_context.space_name))
+        )
         client = OpenCodeAPIClient(base_url=server_url, api_key=config.OPENCODE_API_KEY, directory=directory)
-        
+
         # 1. Initialize session if not resuming
         if not session_id:
             try:
                 session_id = await client.create_session(title=f"Job {job_context.ticket_id}")
-            except (httpx.HTTPError, json.JSONDecodeError, KeyError) as e:
+            except (httpx.HTTPError, CircuitBreakerOpenError, json.JSONDecodeError, KeyError) as e:
                 logger.error("Failed to create agent execution session: %s", e)
                 return JobResult(
                     task_id=job_context.ticket_id,
@@ -474,13 +219,13 @@ class OpenCodeService:
                 prompt=prompt,
                 model=config.OPENCODE_MODEL,
             )
-        except (httpx.HTTPError, json.JSONDecodeError) as e:
+        except (httpx.HTTPError, CircuitBreakerOpenError, json.JSONDecodeError) as e:
             # Check if this is a 404 error indicating a stale/missing session
             is_404 = False
             response = getattr(e, "response", None)
-            if response is not None and getattr(response, "status_code", None) == 404:
-                is_404 = True
-            elif isinstance(e, httpx.HTTPError) and ("404" in str(e) or "Not Found" in str(e)):
+            if (response is not None and getattr(response, "status_code", None) == 404) or (
+                isinstance(e, httpx.HTTPError) and ("404" in str(e) or "Not Found" in str(e))
+            ):
                 is_404 = True
 
             if is_404 and session_id:
@@ -496,7 +241,7 @@ class OpenCodeService:
                         prompt=prompt,
                         model=config.OPENCODE_MODEL,
                     )
-                except (httpx.HTTPError, json.JSONDecodeError, KeyError) as retry_err:
+                except (httpx.HTTPError, CircuitBreakerOpenError, json.JSONDecodeError, KeyError) as retry_err:
                     logger.error("Failed to execute agent instructions on new session: %s", retry_err)
                     return JobResult(
                         task_id=job_context.ticket_id,
@@ -523,7 +268,7 @@ class OpenCodeService:
         # 4. Extract reply text and build return state schemas
         parts = msg_data.get("parts", [])
         reply_text = "".join(p.get("text", "") for p in parts if p.get("type") == "text")
-        
+
         logger.info("Agent execution complete on session: %s", session_id)
         data = extract_json_block(reply_text, job_context.ticket_id)
 
@@ -575,13 +320,12 @@ class OpenCodeService:
         tuple[JobResult, str | None]
             The output JobResult and active session ID.
         """
+
         def run_in_new_loop():
             new_loop = asyncio.new_event_loop()
             try:
                 asyncio.set_event_loop(new_loop)
-                return new_loop.run_until_complete(
-                    cls.invoke_async(job_context, progress_callback, session_id)
-                )
+                return new_loop.run_until_complete(cls.invoke_async(job_context, progress_callback, session_id))
             finally:
                 new_loop.close()
 

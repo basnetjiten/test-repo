@@ -13,22 +13,22 @@ Responsibilities
 
 from __future__ import annotations
 
-import logging
 import time
 from typing import TYPE_CHECKING
 
 import httpx
 
-from ebdev.models.schemas import JobResult
+from ebdev.core.logger import get_logger
+from ebdev.models.graph_state import JobResult
 from ebdev.services import checkpoint, db
 
 if TYPE_CHECKING:
-    from ebdev.models.schemas import GraphState
+    from ebdev.models.graph_state import GraphState
 
 # ---------------------------------------------------------------------------
 # Module-level logger
 # ---------------------------------------------------------------------------
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -105,8 +105,10 @@ async def finalize_node(state: GraphState) -> GraphState:
     logger.info("Done in %ss.", duration)
     logger.info("Job %s finished with status: %s.", ctx.ticket_id, status)
 
-    return state.model_copy(update={
-        "last_node": "finalize_agent",
-        "result": result,
-        "done": True,
-    })
+    return state.model_copy(
+        update={
+            "last_node": "finalize_agent",
+            "result": result,
+            "done": True,
+        }
+    )

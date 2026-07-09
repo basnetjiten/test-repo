@@ -13,23 +13,24 @@ Responsibilities
 
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING
 
 from ebdev.config import config
+from ebdev.core.logger import get_logger
 
 if TYPE_CHECKING:
-    from typing import Any, AsyncIterator, Dict, Optional
+    from typing import Any
 
 # ---------------------------------------------------------------------------
 # Module-level logger
 # ---------------------------------------------------------------------------
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 async def cleanup_thread(thread_id: str) -> bool:
     """
@@ -116,6 +117,7 @@ async def get_thread_history(
 
     try:
         import inspect
+
         res = checkpointer.alist(thread_config, limit=limit)
         results = await res if inspect.isawaitable(res) else res
         async for checkpoint_tuple in results:
@@ -127,9 +129,7 @@ async def get_thread_history(
                     "checkpoint_id": ckpt.get("id"),
                     "step": metadata.get("step"),
                     "source": metadata.get("source"),
-                    "next_nodes": checkpoint_tuple.config.get(
-                        "configurable", {}
-                    ).get("checkpoint_ns", ""),
+                    "next_nodes": checkpoint_tuple.config.get("configurable", {}).get("checkpoint_ns", ""),
                 }
             )
     except Exception as exc:

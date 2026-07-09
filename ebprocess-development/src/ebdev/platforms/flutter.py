@@ -13,17 +13,17 @@ Responsibilities
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 
 from ebdev.core.exceptions import PlatformStrategyError
+from ebdev.core.logger import get_logger
 from ebdev.platforms.base import PlatformStrategy
 from ebdev.services import flutter_cmd
 
 # ---------------------------------------------------------------------------
 # Module-level logger
 # ---------------------------------------------------------------------------
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 class FlutterStrategy(PlatformStrategy):
     """Execution strategy handling linter, dependency, and scaffolding actions for Flutter mobile."""
 
-    async def prepare(self, repo_path: Path, branch_name: str) -> None:
+    async def prepare(self, repo_path: Path, _branch_name: str) -> None:
         """
         Resolve Flutter dependencies and run code generation.
 
@@ -63,8 +63,10 @@ class FlutterStrategy(PlatformStrategy):
         logger.info("Running build_runner build...")
         # Run build_runner during prepare to ensure all code-generated files exist initially
         if not await flutter_cmd.build_runner(str(repo_path), output=output_lines):
-            logger.warning("Flutter build_runner failed during preparation, proceeding anyway: %s", 
-                           output_lines[-1] if output_lines else "unknown build_runner error")
+            logger.warning(
+                "Flutter build_runner failed during preparation, proceeding anyway: %s",
+                output_lines[-1] if output_lines else "unknown build_runner error",
+            )
 
     async def validate(self, repo_path: Path) -> list[str]:
         """
@@ -108,10 +110,10 @@ class FlutterStrategy(PlatformStrategy):
         # Collect only "error •" lines that are NOT in auto-generated files
         # (.freezed.dart / .g.dart / .graphql.dart) because those are built by
         # code-generation tools and their errors are never caused by our feature code.
-        _GENERATED_SUFFIXES = (".freezed.dart", ".g.dart", ".graphql.dart", ".gql.dart")
+        _generated_suffixes = (".freezed.dart", ".g.dart", ".graphql.dart", ".gql.dart")
 
         def _is_generated_file(line: str) -> bool:
-            return any(suffix in line for suffix in _GENERATED_SUFFIXES)
+            return any(suffix in line for suffix in _generated_suffixes)
 
         has_errors = "error •" in validation_output.lower()
         if not analyze_ok and not has_errors:
@@ -135,7 +137,7 @@ class FlutterStrategy(PlatformStrategy):
 
         return errors
 
-    async def bootstrap(self, repo_path: Path, starter_type: str) -> None:
+    async def bootstrap(self, repo_path: Path, starter_type: str) -> None:  # noqa: ARG002
         """
         Seed Flutter project files. Not implemented on this platform strategy.
 

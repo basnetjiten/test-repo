@@ -14,17 +14,16 @@ Responsibilities
 
 from __future__ import annotations
 
-import logging
-from pathlib import Path
 from typing import TYPE_CHECKING
 
+from ebdev.core.logger import get_logger
 from ebdev.core.nodes.common import send_progress
 from ebdev.services.epic_state import get_epic_state_service
 
 if TYPE_CHECKING:
-    from ebdev.models.schemas import GraphState
+    from ebdev.models.graph_state import GraphState
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 async def preflight_node(state: GraphState) -> GraphState:
@@ -44,7 +43,7 @@ async def preflight_node(state: GraphState) -> GraphState:
 
     epic_dir = ctx.project_storage_dir() / ctx.spoq_epic_dir
     svc = get_epic_state_service(epic_dir)
-    
+
     try:
         # Load from disk to sync any manual corrections or file-based updates
         snapshot = await svc.load()
@@ -67,10 +66,12 @@ async def preflight_node(state: GraphState) -> GraphState:
         # Analyze task states in the registry to determine skip target
         all_tasks = list(snapshot.tasks.values())
         if not all_tasks:
-            return state.model_copy(update={
-                "generated_artifacts": updated_artifacts,
-                "preflight_skip_to": None,
-            })
+            return state.model_copy(
+                update={
+                    "generated_artifacts": updated_artifacts,
+                    "preflight_skip_to": None,
+                }
+            )
 
         # Count statuses
         total = len(all_tasks)
@@ -81,7 +82,11 @@ async def preflight_node(state: GraphState) -> GraphState:
 
         logger.info(
             "Preflight task check summary: total=%d, passed=%d, blocked=%d, built_or_failed=%d, evaluating=%d",
-            total, passed_count, blocked_count, built_or_failed_count, evaluating_count
+            total,
+            passed_count,
+            blocked_count,
+            built_or_failed_count,
+            evaluating_count,
         )
 
         skip_to = None
@@ -100,10 +105,12 @@ async def preflight_node(state: GraphState) -> GraphState:
             logger.info("Found tasks in evaluating state. Skipping planning and building, routing to evaluator.")
             skip_to = "evaluator_agent"
 
-        return state.model_copy(update={
-            "generated_artifacts": updated_artifacts,
-            "preflight_skip_to": skip_to,
-        })
+        return state.model_copy(
+            update={
+                "generated_artifacts": updated_artifacts,
+                "preflight_skip_to": skip_to,
+            }
+        )
 
     except Exception as exc:
         logger.warning("Failed to perform preflight checks: %s. Proceeding normally.", exc)

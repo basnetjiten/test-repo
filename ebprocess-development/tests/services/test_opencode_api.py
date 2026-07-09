@@ -16,7 +16,9 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from ebdev.config import config
-from ebdev.models.schemas import SprintTicket, JobContext, GraphState, JobResult
+from ebdev.core.graph import graph
+from ebdev.models.graph_state import GraphState, JobContext, JobResult
+from ebdev.models.ticket import SprintTicket
 
 
 def _discover_space_name() -> str:
@@ -45,8 +47,7 @@ async def run_test():
         id="EPIC-102",
         title="Create Enquiry Page",
         description=(
-            "Create an enquiry page with a form containing title and "
-            "description fields, and a submit button."
+            "Create an enquiry page with a form containing title and description fields, and a submit button."
         ),
         status="To Do",
         acceptance_criteria=[
@@ -114,11 +115,12 @@ async def run_test():
 
             # Write context file for the platform
             from ebdev.services.opencode import OpenCodeService
+
             OpenCodeService.write_context(ctx, storage, platform=platform)
 
             return (
                 JobResult(
-                    job_id=ctx.ticket_id,
+                    task_id=ctx.ticket_id,
                     space_name=ctx.space_name,
                     ticket_id=ctx.ticket_id,
                     status="success",
@@ -126,30 +128,29 @@ async def run_test():
                 ),
                 f"mock-session-{platform}",
             )
-        else:
-            plat_path = workspace_dir / platform
-            plat_path.mkdir(parents=True, exist_ok=True)
+        plat_path = workspace_dir / platform
+        plat_path.mkdir(parents=True, exist_ok=True)
 
-            if platform == "flutter":
-                lib_dir = plat_path / "lib"
-                lib_dir.mkdir(parents=True, exist_ok=True)
-                (lib_dir / "main.dart").write_text("// Mock Flutter Main\n", encoding="utf-8")
-            elif platform == "api":
-                src_dir = plat_path / "src"
-                src_dir.mkdir(parents=True, exist_ok=True)
-                (src_dir / "main.py").write_text("# Mock API Main\n", encoding="utf-8")
+        if platform == "flutter":
+            lib_dir = plat_path / "lib"
+            lib_dir.mkdir(parents=True, exist_ok=True)
+            (lib_dir / "main.dart").write_text("// Mock Flutter Main\n", encoding="utf-8")
+        elif platform == "api":
+            src_dir = plat_path / "src"
+            src_dir.mkdir(parents=True, exist_ok=True)
+            (src_dir / "main.py").write_text("# Mock API Main\n", encoding="utf-8")
 
-            return (
-                JobResult(
-                    job_id=ctx.ticket_id,
-                    space_name=ctx.space_name,
-                    ticket_id=ctx.ticket_id,
-                    status="success",
-                    summary=f"Code generated successfully for {platform}.",
-                    pr_url=f"https://github.com/mock/pr/{platform}",
-                ),
-                f"mock-session-{platform}",
-            )
+        return (
+            JobResult(
+                task_id=ctx.ticket_id,
+                space_name=ctx.space_name,
+                ticket_id=ctx.ticket_id,
+                status="success",
+                summary=f"Code generated successfully for {platform}.",
+                pr_url=f"https://github.com/mock/pr/{platform}",
+            ),
+            f"mock-session-{platform}",
+        )
 
     mock_git_run = MagicMock()
     mock_git_run.returncode = 0
@@ -170,16 +171,13 @@ async def run_test():
 
     async def mock_send_prompt_message(self, session_id, agent, prompt, model=None):
         import json
+
         strategy_data = {
             "complexity": "low",
             "execution_mode": "spoq",
             "mocking_rules": "mock all things",
         }
-        return {
-            "parts": [
-                {"type": "text", "text": f"```json\n{json.dumps(strategy_data)}\n```"}
-            ]
-        }
+        return {"parts": [{"type": "text", "text": f"```json\n{json.dumps(strategy_data)}\n```"}]}
 
     patches = [
         patch("ebdev.core.nodes.plan.invoke_opencode", side_effect=mock_invoke),
@@ -223,39 +221,27 @@ async def run_test():
         p.start()
 
     try:
-        from ebdev.core.graph import graph
-
         print("Invoking LangGraph concurrent pipeline...")
         thread_config = {"configurable": {"thread_id": "test-thread-epic-102"}}
         final_state = await graph.ainvoke(initial_state, config=thread_config)
         final_ctx = (
-            final_state.get("context")
-            if isinstance(final_state, dict)
-            else getattr(final_state, "context", None)
+            final_state.get("context") if isinstance(final_state, dict) else getattr(final_state, "context", None)
         )
 
         print("\n=== VERIFYING DIRECTORY STRUCTURE ===")
 
-        assert final_ctx is not None, (
-            "Expected the pipeline to return a final context."
-        )
+        assert final_ctx is not None, "Expected the pipeline to return a final context."
 
         # SPOQ tasks should be populated in state (no YAML files on disk)
         spoq_tasks = (
-            final_state.get("spoq_tasks")
-            if isinstance(final_state, dict)
-            else getattr(final_state, "spoq_tasks", [])
+            final_state.get("spoq_tasks") if isinstance(final_state, dict) else getattr(final_state, "spoq_tasks", [])
         )
-        assert len(spoq_tasks) > 0, (
-            "Expected SPOQ tasks to be populated in GraphState"
-        )
+        assert len(spoq_tasks) > 0, "Expected SPOQ tasks to be populated in GraphState"
         print(f"[PASSED] Verified {len(spoq_tasks)} SPOQ tasks in GraphState.")
 
         for platform in ["api", "flutter"]:
             plat_workspace = workspace_dir / platform
-            assert plat_workspace.exists(), (
-                f"Expected project folder {plat_workspace} to exist."
-            )
+            assert plat_workspace.exists(), f"Expected project folder {plat_workspace} to exist."
             print(f"[PASSED] Verified project created at {plat_workspace}")
 
             opencode_in_workspace = plat_workspace / ".opencode"

@@ -32,13 +32,13 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from ebdev.core.exceptions import EpicStateError
-from ebdev.models.schemas import EpicStateSnapshot, TaskArtifactState
+from ebdev.core.logger import get_logger
+from ebdev.models.task import EpicStateSnapshot, TaskArtifactState
 
 if TYPE_CHECKING:
     pass
@@ -46,7 +46,7 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 # Module-level logger
 # ---------------------------------------------------------------------------
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # Internal constants
@@ -57,6 +57,7 @@ _STATE_FILENAME: str = "state.json"
 # ---------------------------------------------------------------------------
 # Internal I/O helpers (run in thread pool via asyncio.to_thread)
 # ---------------------------------------------------------------------------
+
 
 def _read_snapshot_sync(state_path: Path) -> Optional[EpicStateSnapshot]:
     """
@@ -85,9 +86,7 @@ def _read_snapshot_sync(state_path: Path) -> Optional[EpicStateSnapshot]:
         data = json.loads(raw)
         return EpicStateSnapshot.model_validate(data)
     except (json.JSONDecodeError, ValueError) as exc:
-        raise EpicStateError(
-            f"Failed to parse state.json at {state_path}: {exc}"
-        ) from exc
+        raise EpicStateError(f"Failed to parse state.json at {state_path}: {exc}") from exc
 
 
 def _write_snapshot_sync(state_path: Path, snapshot: EpicStateSnapshot) -> None:
@@ -115,9 +114,7 @@ def _write_snapshot_sync(state_path: Path, snapshot: EpicStateSnapshot) -> None:
         payload = snapshot.model_dump_json(indent=2)
 
         # Write to a sibling temp file, then rename for atomicity.
-        fd, tmp_path_str = tempfile.mkstemp(
-            dir=state_path.parent, prefix=".state_", suffix=".json.tmp"
-        )
+        fd, tmp_path_str = tempfile.mkstemp(dir=state_path.parent, prefix=".state_", suffix=".json.tmp")
         tmp_path = Path(tmp_path_str)
         try:
             with open(fd, "w", encoding="utf-8") as fh:
@@ -129,14 +126,13 @@ def _write_snapshot_sync(state_path: Path, snapshot: EpicStateSnapshot) -> None:
     except EpicStateError:
         raise
     except OSError as exc:
-        raise EpicStateError(
-            f"Failed to write state.json at {state_path}: {exc}"
-        ) from exc
+        raise EpicStateError(f"Failed to write state.json at {state_path}: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 class EpicStateService:
     """
@@ -223,9 +219,7 @@ class EpicStateService:
         if existing is not None:
             return existing
 
-        logger.info(
-            "No state.json found for %s — initializing empty snapshot.", epic_id
-        )
+        logger.info("No state.json found for %s — initializing empty snapshot.", epic_id)
         return EpicStateSnapshot(epic_id=epic_id, space_name=space_name)
 
     # ------------------------------------------------------------------
@@ -301,6 +295,7 @@ class EpicStateService:
 # ---------------------------------------------------------------------------
 # Module-level factory helper
 # ---------------------------------------------------------------------------
+
 
 def get_epic_state_service(epic_dir: Path) -> EpicStateService:
     """

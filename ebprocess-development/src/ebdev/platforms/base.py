@@ -19,7 +19,7 @@ class PlatformStrategy(ABC):
     """Abstract Strategy interface for platform-specific build, lint, and test actions."""
 
     @abstractmethod
-    async def prepare(self, repo_path: Path, branch_name: str) -> None:
+    async def prepare(self, repo_path: Path, _branch_name: str) -> None:
         """
         Resolve platform-specific dependencies and environment setup.
 
@@ -27,7 +27,7 @@ class PlatformStrategy(ABC):
         ----------
         repo_path : Path
             The repository path to prepare.
-        branch_name : str
+        _branch_name : str
             The name of the branch to set up.
         """
         pass
@@ -58,7 +58,7 @@ class PlatformStrategy(ABC):
         ----------
         repo_path : Path
             The destination repository directory.
-        starter_type : str
+        _starter_type : str
             The type of starter skeleton to bootstrap.
         """
         pass
