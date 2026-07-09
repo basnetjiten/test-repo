@@ -12,18 +12,18 @@ Responsibilities
 
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING
 
+from ebdev.core.logger import get_logger
 from ebdev.services import db
 
 if TYPE_CHECKING:
-    from ebdev.models.schemas import GraphState
+    from ebdev.models.graph_state import GraphState
 
 # ---------------------------------------------------------------------------
 # Module-level logger
 # ---------------------------------------------------------------------------
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------

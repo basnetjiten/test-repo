@@ -9,31 +9,121 @@ Responsibilities
 * Identify active platforms for the current stage or wave.
 * Run platform validation checks (linting, tests, compilation) concurrently.
 * Aggregate and record validation errors on failure.
-* Update SPOQ task status on task success.
-* Handle system-level errors during the validation phase.
+* Update SPOQ task status in GraphState (persisted via LangGraph checkpointing).
+* Advance to the next epic or finish when all tasks are validated.
 """
 
 from __future__ import annotations
 
 import asyncio
-import logging
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from ebdev.core.exceptions import EbDevError
+from ebdev.core.exceptions import EbDevError, EpicStateError
+from ebdev.core.logger import get_logger
 from ebdev.core.nodes.common import send_progress
-from ebdev.core.spoq_map import load_map_manifest, mark_epic_status, next_ready_epic, save_map_manifest
-from ebdev.core.spoq_utils import get_active_wave_tasks, update_spoq_task_status
+from ebdev.core.spoq_utils import get_state_active_tasks
+from ebdev.models.task import TaskArtifacts, TaskArtifactState
 from ebdev.platforms import get_platform_strategy
+from ebdev.services.epic_state import get_epic_state_service
 
 if TYPE_CHECKING:
-    from ebdev.models.schemas import GraphState
+    from ebdev.models.graph_state import GraphState, JobContext
 
 # ---------------------------------------------------------------------------
 # Module-level logger
 # ---------------------------------------------------------------------------
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Private helpers
+# ---------------------------------------------------------------------------
+
+
+async def _write_validation_state(
+    ctx: "JobContext",
+    completed_ids: set[str],
+    *,
+    passed: bool,
+    platform_errors: dict[str, list[str]],
+) -> None:
+    """
+    Update ``state.json`` after a SPOQ validation wave completes.
+
+    Parameters
+    ----------
+    ctx:
+        Job context used to resolve the epic directory path and space name.
+    completed_ids:
+        Set of task IDs that were part of this validation wave.
+    passed:
+        ``True`` when all platforms passed; ``False`` on any failure.
+    platform_errors:
+        Per-platform error lists — used to derive journal path hints.
+
+    Notes
+    -----
+    Errors are caught and logged rather than re-raised so that a state.json
+    write failure never interrupts the main pipeline.
+    """
+    if not ctx.spoq_epic_dir:
+        return
+
+    epic_dir = ctx.project_storage_dir() / ctx.spoq_epic_dir
+    svc = get_epic_state_service(epic_dir)
+
+    try:
+        failure_count = sum(len(v) for v in platform_errors.values()) if not passed else 0
+        if failure_count:
+            logger.info(
+                "Recording state for %d completed tasks (%d platform failures).",
+                len(completed_ids),
+                failure_count,
+            )
+
+        snapshot = await svc.load_or_init(
+            epic_id=ctx.spoq_epic_dir,
+            space_name=ctx.space_name,
+        )
+        for task_id in completed_ids:
+            existing = snapshot.get_task(task_id)
+            platform = existing.platform if existing else ctx.platform
+
+            # Attempt to derive the journal path from the known naming convention.
+            journal_rel: str | None = None
+            if existing and existing.artifacts.journal:
+                journal_rel = existing.artifacts.journal
+            else:
+                journals_dir = epic_dir / "journals"
+                candidate = journals_dir / f"{task_id}.evaluation.md"
+                if candidate.exists():
+                    try:
+                        journal_rel = str(candidate.relative_to(ctx.project_storage_dir().parent))
+                    except ValueError:
+                        journal_rel = str(candidate)
+
+            updated_artifacts = TaskArtifacts(
+                contract=existing.artifacts.contract if existing else None,
+                journal=journal_rel,
+                schema_file=existing.artifacts.schema_file if existing else None,
+                verification=existing.artifacts.verification if existing else None,
+            )
+            task_state = TaskArtifactState(
+                task_id=task_id,
+                platform=platform,
+                status="passed" if passed else "evaluate_failed",
+                artifacts=updated_artifacts,
+                repair_iteration=existing.repair_iteration if existing else 0,
+                evaluation_avg=None,
+                evaluation_min=None,
+            )
+            snapshot = snapshot.upsert_task(task_state)
+
+        await svc.save(snapshot)
+    except EpicStateError as exc:
+        logger.warning("Could not update state.json after validation (non-fatal): %s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -52,29 +142,18 @@ async def validate_node(state: GraphState) -> GraphState:
     -------
     GraphState
         The updated state with the validation results.
-
-    Raises
-    ------
-    ValueError
-        If the SPOQ epic task directory is missing when execution mode is SPOQ.
     """
-    state.last_node = "validate"
+    state.last_node = "evaluator_agent"
     ctx = state.context
-    
-    active_tasks = []
+
     is_spoq = state.is_spoq
-    spoq_epic_dir: str | None = None
     if is_spoq:
-        if ctx.spoq_epic_dir is None:
-            raise ValueError("spoq_epic_dir cannot be None when execution_mode is 'spoq'")
-        spoq_epic_dir = ctx.spoq_epic_dir
-        active_tasks = get_active_wave_tasks(spoq_epic_dir)
-        tasks_to_validate = []
+        active_tasks = get_state_active_tasks(state.spoq_tasks)
+        tasks_to_validate: list[tuple[str, str]] = []
         for t in active_tasks:
-            for p in t.get("skills_required", []):
-                tasks_to_validate.append((t["id"], p))
-        # Deduplicate
-        seen = set()
+            for p in t.skills_required:
+                tasks_to_validate.append((t.id, p))
+        seen: set[tuple[str, str]] = set()
         unique_tasks = []
         for tp in tasks_to_validate:
             if tp not in seen:
@@ -85,82 +164,86 @@ async def validate_node(state: GraphState) -> GraphState:
     else:
         platforms = ctx.platforms
         tasks_to_validate = [("", p) for p in platforms]
-    repo_path = Path(ctx.repo_path)
-    
-    await send_progress(state, f"Validating: Running stage {state.current_stage + 1} quality validation gates concurrently...")
+        active_tasks = []
+
+    Path(ctx.repo_path)
+
+    await send_progress(
+        state,
+        f"Validating: Running stage {state.current_stage + 1} quality validation gates concurrently...",
+    )
     start_time = time.time()
-    
-    platform_errors: dict[str, list[str]] = {}
-    
-    # 1. Async Validation Worker Function
+
+    # ------------------------------------------------------------------
+    # Async Validation Worker
+    # ------------------------------------------------------------------
     async def validate_single_task_platform(task_id: str, platform: str) -> tuple[str, list[str]]:
         task_label = f"[{task_id}:{platform}]" if task_id else f"[{platform}]"
         logger.info("%s Running validator...", task_label)
         plat_path = ctx.platform_path(platform)
-        
+
         if not is_spoq:
-            # Legacy non-SPOQ mode fallback
             strategy = get_platform_strategy(platform)
             try:
                 errors = await strategy.validate(plat_path)
                 return platform, errors
             except (EbDevError, OSError, asyncio.TimeoutError) as e:
-                err_msg = f"System check exception during validation on platform {platform}: {str(e)}"
-                return platform, [err_msg]
-                
-        # SPOQ Mode: Run the @code_evaluator agent via OpenCode
-        eval_ctx = ctx.model_copy(update={
-            "repo_path": str(plat_path),
-            "platform": platform,
-            "active_task_id": task_id,
-            "current_agent": "code_evaluator"
-        })
-        
+                return platform, [f"System check exception during validation on platform {platform}: {e!s}"]
+
+        eval_ctx = ctx.model_copy(
+            update={
+                "repo_path": str(plat_path),
+                "platform": platform,
+                "active_task_id": task_id,
+                "current_agent": "code_evaluator",
+            }
+        )
+
         loop = asyncio.get_running_loop()
+
         def _on_opencode_progress(msg: str):
-            asyncio.run_coroutine_threadsafe(
-                send_progress(state, f"{task_label} Evaluator: {msg}"), loop
-            )
-            
+            asyncio.run_coroutine_threadsafe(send_progress(state, f"{task_label} Evaluator: {msg}"), loop)
+
         session_id_key = f"{ctx.ticket_id}_{platform}"
         session_ids = getattr(state, "opencode_session_ids", {}) or {}
         from ebdev.services import db
+
         existing_session_id = session_ids.get(platform) or await db.get_session_id(session_id_key)
-        
+
         try:
             from ebdev.services.opencode import invoke_opencode
+
             result, _ = await asyncio.to_thread(
                 invoke_opencode,
                 eval_ctx,
                 progress_callback=_on_opencode_progress,
-                session_id=existing_session_id
+                session_id=existing_session_id,
             )
-            
+
             if result.status == "failed" or result.errors:
                 errs = result.errors or []
-                remediation = getattr(result, "remediation", "") or (result.summary if result.status == "failed" else "")
+                remediation = getattr(result, "remediation", "") or (
+                    result.summary if result.status == "failed" else ""
+                )
                 if remediation:
                     errs.append(remediation)
                 return platform, errs
-            else:
-                logger.info("%s Code validation passed: %s", task_label, result.summary)
-                return platform, []
+            logger.info("%s Code validation passed: %s", task_label, result.summary)
+            return platform, []
         except Exception as e:
             return platform, [f"Evaluator execution exception: {e}"]
 
     try:
-        # Run active platform validation checks concurrently
         runs = await asyncio.gather(*[validate_single_task_platform(t, p) for t, p in tasks_to_validate])
-        platform_errors = {}
+        platform_errors: dict[str, list[str]] = {}
         for p, errs in runs:
             platform_errors.setdefault(p, []).extend(errs)
-        
+
         duration = round(time.time() - start_time, 2)
         logger.info("Stage %d checks completed in %ss.", state.current_stage + 1, duration)
 
-        # Consolidate results: Graph passes ONLY if all platform error lists are empty
         all_passed = True
-        combined_errors = []
+        combined_errors: list[str] = []
         done_platforms = {**state.done_platforms}
         failed_platforms = {**state.failed_platforms}
 
@@ -176,51 +259,61 @@ async def validate_node(state: GraphState) -> GraphState:
                 failed_platforms[p] = False
                 logger.info("[%s] PASSED", p)
 
-        # Determine if we should proceed to the next stage, epic, or finish.
         next_stage = state.current_stage
         stages_finished = True
-        next_epic_dir: str | None = None
+        updated_spoq_tasks = list(state.spoq_tasks)
+        status_msg: str = ""
+        updated_artifacts = {**state.generated_artifacts}
 
         if all_passed:
-            if is_spoq and spoq_epic_dir is not None:
-                from ebdev.core.spoq_utils import get_spoq_tasks, update_roadmap_status
+            if is_spoq:
+                # Mark current wave tasks as completed in state
+                completed_ids = {t.id for t in active_tasks}
+                for i, task in enumerate(updated_spoq_tasks):
+                    if task.id in completed_ids:
+                        updated_spoq_tasks[i] = task.model_copy(update={"status": "completed"})
+                logger.info("Marked %d SPOQ tasks as completed in state.", len(completed_ids))
+                # Mirror completion into the .ebpearls artifact registry.
+                await _write_validation_state(
+                    ctx=state.context,
+                    completed_ids=completed_ids,
+                    passed=True,
+                    platform_errors={},
+                )
 
-                # Mark active tasks of the current wave as completed since they passed validation
-                for t in active_tasks:
-                    update_spoq_task_status(spoq_epic_dir, t["id"], "completed")
-                logger.info("Marked SPOQ tasks as completed for the current wave.")
+                # Update GraphState.generated_artifacts
+                epic_dir = ctx.project_storage_dir() / ctx.spoq_epic_dir if ctx.spoq_epic_dir else None
+                for task_id in completed_ids:
+                    existing = updated_artifacts.get(task_id, {})
+                    journal_rel = existing.get("journal") or ""
+                    if not journal_rel and epic_dir:
+                        candidate = epic_dir / "journals" / f"{task_id}.evaluation.md"
+                        if candidate.exists():
+                            try:
+                                journal_rel = str(candidate.relative_to(ctx.project_storage_dir().parent))
+                            except ValueError:
+                                journal_rel = str(candidate)
+                    updated_artifacts[task_id] = {
+                        **existing,
+                        "status": "passed",
+                        "journal": journal_rel,
+                    }
 
-                # Re-load all tasks to evaluate if the entire epic is finished
-                all_tasks = get_spoq_tasks(spoq_epic_dir)
-                remaining = [t for t in all_tasks if t.get("status", "pending") in ["pending", "blocked"]]
-                current_epic_done = not remaining
-
-                if current_epic_done:
-                    if ctx.spoq_map_dir:
-                        map_dir = Path(ctx.spoq_map_dir)
-                        program_map = load_map_manifest(map_dir)
-                        current_epic_id = Path(spoq_epic_dir).name
-                        roadmap_path = map_dir.parent / "ROADMAP.md"
-
-                        mark_epic_status(program_map, current_epic_id, "done")
-                        update_roadmap_status(str(roadmap_path), current_epic_id, "done")
-
-                        next_epic = next_ready_epic(program_map)
-                        if next_epic is not None:
-                            mark_epic_status(program_map, next_epic.id, "in-progress")
-                            next_epic_dir = str(map_dir / "epics" / next_epic.id)
-                            update_roadmap_status(str(roadmap_path), next_epic.id, "in-progress")
-                            stages_finished = False
-                            status_msg = f"Epic {current_epic_id} passed. Advancing to next epic {next_epic.id}."
-                        else:
-                            status_msg = "All validations passed across the full SPOQ map."
-                        save_map_manifest(map_dir, program_map)
-                    else:
-                        status_msg = "All validations passed."
-                else:
+                # Check if all tasks in the current epic are done
+                remaining = [t for t in updated_spoq_tasks if t.status in ("pending", "blocked")]
+                if remaining:
                     stages_finished = False
-                    status_msg = f"Wave transition complete. Remaining tasks stay queued in the active epic."
-            elif not is_spoq and state.strategy and state.strategy.stages:
+                    status_msg = "Wave transition complete. Remaining tasks stay queued."
+                else:
+                    # All tasks done — current epic is complete
+                    active_epic_id = ctx.shared_context.get("active_epic_id")
+                    status_msg = (
+                        f"Epic {active_epic_id or 'unknown'} completed."
+                        if active_epic_id
+                        else "All validations passed."
+                    )
+
+            elif state.strategy and state.strategy.stages:
                 if state.current_stage < len(state.strategy.stages) - 1:
                     next_stage = state.current_stage + 1
                     stages_finished = False
@@ -231,31 +324,72 @@ async def validate_node(state: GraphState) -> GraphState:
                 status_msg = "All validations passed."
         else:
             status_msg = f"Validation failed with {len(combined_errors)} check errors. Repair needed."
+            # Mirror failure into the .ebpearls artifact registry so agents
+            # can identify which tasks need repair on next resume.
+            if is_spoq:
+                failed_ids = {
+                    t.id
+                    for t in active_tasks
+                    if state.failed_platforms.get(next(iter(t.skills_required), ctx.platform), False)
+                }
+                if failed_ids:
+                    await _write_validation_state(
+                        ctx=state.context,
+                        completed_ids=failed_ids,
+                        passed=False,
+                        platform_errors=platform_errors,
+                    )
+
+                    # Update GraphState.generated_artifacts
+                    epic_dir = ctx.project_storage_dir() / ctx.spoq_epic_dir if ctx.spoq_epic_dir else None
+                    for task_id in failed_ids:
+                        existing = updated_artifacts.get(task_id, {})
+                        journal_rel = existing.get("journal") or ""
+                        if not journal_rel and epic_dir:
+                            candidate = epic_dir / "journals" / f"{task_id}.evaluation.md"
+                            if candidate.exists():
+                                try:
+                                    journal_rel = str(candidate.relative_to(ctx.project_storage_dir().parent))
+                                except ValueError:
+                                    journal_rel = str(candidate)
+                        updated_artifacts[task_id] = {
+                            **existing,
+                            "status": "evaluate_failed",
+                            "journal": journal_rel,
+                        }
 
         await send_progress(state, status_msg)
 
-        # Update context validation errors
-        updated_ctx = ctx.model_copy(update={
-            "validation_errors": combined_errors,
-            "spoq_epic_dir": next_epic_dir or spoq_epic_dir,
-        })
+        updated_ctx = ctx.model_copy(
+            update={
+                "validation_errors": combined_errors,
+            }
+        )
 
-        return state.model_copy(update={
-            "context": updated_ctx,
-            "done": all_passed and stages_finished,
-            "current_stage": next_stage,
-            "done_platforms": done_platforms,
-            "failed_platforms": failed_platforms,
-        })
+        return state.model_copy(
+            update={
+                "last_node": "evaluator_agent",
+                "context": updated_ctx,
+                "done": all_passed and stages_finished,
+                "current_stage": next_stage,
+                "done_platforms": done_platforms,
+                "failed_platforms": failed_platforms,
+                "spoq_tasks": updated_spoq_tasks,
+                "generated_artifacts": updated_artifacts,
+            }
+        )
 
     except (EbDevError, ValueError, KeyError, RuntimeError) as e:
-        err_msg = f"System failure during validation phase: {str(e)}"
+        err_msg = f"System failure during validation phase: {e!s}"
         logger.error(err_msg)
         await send_progress(state, "Validation failed due to validation system error.")
-        
+
         updated_ctx = ctx.model_copy(update={"validation_errors": [err_msg]})
-        return state.model_copy(update={
-            "context": updated_ctx,
-            "done": False,
-            "failed": True
-        })
+        return state.model_copy(
+            update={
+                "last_node": "evaluator_agent",
+                "context": updated_ctx,
+                "done": False,
+                "failed": True,
+            }
+        )

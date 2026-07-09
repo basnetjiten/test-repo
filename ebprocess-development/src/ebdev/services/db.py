@@ -14,19 +14,19 @@ Responsibilities
 from __future__ import annotations
 
 import json
-import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ebdev.config import config
+from ebdev.core.logger import get_logger
 
 if TYPE_CHECKING:
-    from ebdev.models.schemas import GraphState, JobResult
+    from ebdev.models.graph_state import GraphState, JobResult
 
 # ---------------------------------------------------------------------------
 # Module-level logger
 # ---------------------------------------------------------------------------
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -69,6 +69,37 @@ def _save_json(path: Path, data: dict) -> None:
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+async def init_db() -> None:
+    """Initialize Postgres database tables if they do not exist."""
+    if not config.POSTGRES_URL:
+        return
+    try:
+        import asyncpg
+
+        conn = await asyncpg.connect(config.POSTGRES_URL)
+        try:
+            await conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS jobs (
+                    job_id VARCHAR(255) PRIMARY KEY,
+                    status VARCHAR(50),
+                    summary TEXT,
+                    errors TEXT[],
+                    warnings TEXT[],
+                    opencode_session_id VARCHAR(255),
+                    jira_id VARCHAR(255),
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW()
+                );
+                """
+            )
+            logger.info("Postgres database tables initialized.")
+        finally:
+            await conn.close()
+    except Exception as e:
+        logger.error("Failed to initialize database tables: %s", e)
+
+
 async def update_job_status(result: JobResult) -> bool:
     """
     Update job status in Postgres or fallback JSON.
@@ -97,7 +128,7 @@ async def update_job_status(result: JobResult) -> bool:
                         INSERT INTO jobs (
                             job_id, status, summary, errors, warnings, updated_at
                         ) VALUES ($1, $2, $3, $4, $5, NOW())
-                        ON CONFLICT (job_id) DO UPDATE 
+                        ON CONFLICT (job_id) DO UPDATE
                         SET status = EXCLUDED.status,
                             summary = EXCLUDED.summary,
                             errors = EXCLUDED.errors,
@@ -131,9 +162,7 @@ async def update_job_status(result: JobResult) -> bool:
     return True
 
 
-async def save_session_id(
-    task_id: str, session_id: str, jira_id: str | None = None
-) -> bool:
+async def save_session_id(task_id: str, session_id: str, jira_id: str | None = None) -> bool:
     """
     Persist OpenCode session ID.
 
@@ -269,7 +298,7 @@ async def get_session_id_by_jira_id(ticket_id: str) -> str | None:
 
     # Fallback
     data = _load_json(_SESSIONS_JSON_PATH)
-    for task_id, val in data.items():
+    for _task_id, val in data.items():
         if val.get("jira_id") == ticket_id and val.get("opencode_session_id"):
             return val.get("opencode_session_id")
     return None
@@ -309,7 +338,7 @@ async def sync_state_to_db(state: GraphState) -> bool:
                         INSERT INTO jobs (
                             job_id, status, summary, updated_at
                         ) VALUES ($1, $2, $3, NOW())
-                        ON CONFLICT (job_id) DO UPDATE 
+                        ON CONFLICT (job_id) DO UPDATE
                         SET status = EXCLUDED.status,
                             summary = EXCLUDED.summary,
                             updated_at = NOW();
@@ -340,3 +369,26 @@ async def sync_state_to_db(state: GraphState) -> bool:
     }
     _save_json(_JOBS_JSON_PATH, data)
     return True
+
+
+async def check_db() -> bool:
+    """Check Postgres connectivity. Returns True if reachable."""
+    if not config.POSTGRES_URL:
+        return True  # no DB configured = not degraded
+    try:
+        import asyncpg
+
+        conn = await asyncpg.connect(config.POSTGRES_URL, timeout=3)
+        await conn.execute("SELECT 1")
+        await conn.close()
+        return True
+    except Exception as e:
+        logger.warning("Health check — database unreachable: %s", e)
+        return False
+
+
+async def close_db() -> None:
+    """Release any persistent DB resources (no-op for short-lived connections)."""
+    if not config.POSTGRES_URL:
+        return
+    logger.info("Database connections closed.")

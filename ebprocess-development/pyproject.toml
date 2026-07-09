@@ -12,7 +12,58 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "pyyaml>=6.0.0",
     "types-PyYAML>=6.0.0",
+    "asyncpg>=0.31.0",
+    "langgraph-checkpoint-postgres>=2.0.0",
+    "psycopg[binary]>=3.2.0",
+    "pydantic-settings>=2.0.0",
 ]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.8.0",
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-mock>=3.14.0",
+    "freezegun>=1.5.0",
+    "structlog>=24.0.0",
+    "opentelemetry-api>=1.28.0",
+    "opentelemetry-sdk>=1.28.0",
+    "opentelemetry-instrumentation-fastapi>=0.49b0",
+    "opentelemetry-instrumentation-httpx>=0.49b0",
+    "slowapi>=0.1.9",
+]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 120
+exclude = [".venv", "workspace", ".opencode"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "A", "B", "C4", "SIM", "ARG", "RET", "RUF"]
+ignore = ["E501", "RUF012"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+"tests/**/*.py" = ["ARG001", "ARG002", "RET505"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+ignore_missing_imports = true
+exclude = [".venv", "workspace", ".opencode"]
+warn_unused_ignores = false
+disallow_untyped_defs = false
+
+[project.scripts]
+lint = "ruff check src/"
+lint-fix = "ruff check --fix src/"
+typecheck = "pyright src/"
+test = "pytest -xvs"
 
 [tool.pyright]
 extraPaths = ["src"]
@@ -22,3 +73,18 @@ venv = ".venv"
 [tool.pylint.main]
 source-roots = ["src"]
 init-hook='import sys, os; sys.path.insert(0, os.path.abspath("src"))'
+
+[dependency-groups]
+dev = [
+    "freezegun>=1.5.5",
+    "opentelemetry-api>=1.43.0",
+    "opentelemetry-instrumentation-fastapi>=0.64b0",
+    "opentelemetry-instrumentation-httpx>=0.64b0",
+    "opentelemetry-sdk>=1.43.0",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "pytest-mock>=3.15.1",
+    "ruff>=0.15.20",
+    "slowapi>=0.1.10",
+    "structlog>=25.5.0",
+]

@@ -18,6 +18,19 @@ services:
       - .:/project:ro
     entrypoint: ["sh", "-c", "opencode serve --port 4096 --hostname 0.0.0.0 --print-logs"]
 
+  # ── ebsprinter-db Postgres database ──────────────────────────────────────────
+  ebsprinter-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - .postgres_data:/var/lib/postgresql/data:rw
+
   # ── ebprocess Orchestration API ──────────────────────────────────────────
   ebprocess:
     build:
@@ -30,6 +43,8 @@ services:
     environment:
       # Point to the sibling opencode container by service name
       OPENCODE_SERVER_URL: http://opencode:4096
+      # Override POSTGRES_URL to use Docker service name (resolves inside Docker network)
+      POSTGRES_URL: postgresql://postgres:NewPassword@ebsprinter-db:5432/ebsprinterDb
       # Paths inside the container
       WORKSPACE_DIR: /workspace
       OPENCODE_PROJECT_DIR: /.opencode
@@ -39,4 +54,5 @@ services:
       - ./workspace:/workspace
     depends_on:
       - opencode
+      - ebsprinter-db
     command: ["langgraph", "dev", "--host", "0.0.0.0", "--port", "8000"]

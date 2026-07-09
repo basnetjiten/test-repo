@@ -57,7 +57,6 @@ def get_platform_strategy(platform: str) -> PlatformStrategy:
     key = platform.strip().lower()
     if key not in _STRATEGY_MAP:
         raise UnsupportedPlatformError(
-            f"Unsupported platform '{platform}'. "
-            f"Supported platforms: {list(_STRATEGY_MAP.keys())}"
+            f"Unsupported platform '{platform}'. Supported platforms: {list(_STRATEGY_MAP.keys())}"
         )
     return _STRATEGY_MAP[key]

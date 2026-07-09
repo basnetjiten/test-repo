@@ -13,22 +13,22 @@ Responsibilities
 
 from __future__ import annotations
 
-import logging
 import time
 from typing import TYPE_CHECKING
 
 import httpx
 
-from ebdev.models.schemas import JobResult
-from ebdev.services import db
+from ebdev.core.logger import get_logger
+from ebdev.models.graph_state import JobResult
+from ebdev.services import checkpoint, db
 
 if TYPE_CHECKING:
-    from ebdev.models.schemas import GraphState
+    from ebdev.models.graph_state import GraphState
 
 # ---------------------------------------------------------------------------
 # Module-level logger
 # ---------------------------------------------------------------------------
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -48,7 +48,7 @@ async def finalize_node(state: GraphState) -> GraphState:
     GraphState
         The updated state with the finalized job result and done flag set.
     """
-    state.last_node = "finalize"
+    state.last_node = "finalize_agent"
     start_time = time.time()
     ctx = state.context
     callback_url = ctx.n8n_callback_url
@@ -89,12 +89,26 @@ async def finalize_node(state: GraphState) -> GraphState:
         except httpx.HTTPError as e:
             logger.warning("Callback failed: %s", e)
 
+    # 3. Clean up checkpoint thread (short-term, thread-scoped memory no
+    #    longer needed once the job is complete — keeps storage bounded).
+    try:
+        await checkpoint.cleanup_thread(f"thread-{ctx.ticket_id}")
+    except Exception as exc:
+        logger.warning(
+            "Checkpoint cleanup failed for %s: %s (non-critical).",
+            ctx.ticket_id,
+            exc,
+            exc_info=True,
+        )
+
     duration = round(time.time() - start_time, 2)
     logger.info("Done in %ss.", duration)
     logger.info("Job %s finished with status: %s.", ctx.ticket_id, status)
 
-    return state.model_copy(update={
-        "last_node": "finalize",
-        "result": result,
-        "done": True,
-    })
+    return state.model_copy(
+        update={
+            "last_node": "finalize_agent",
+            "result": result,
+            "done": True,
+        }
+    )

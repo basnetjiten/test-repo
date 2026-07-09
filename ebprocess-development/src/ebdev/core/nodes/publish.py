@@ -15,24 +15,24 @@ Responsibilities
 from __future__ import annotations
 
 import asyncio
-import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import httpx
 
 from ebdev.config import config
+from ebdev.core.logger import get_logger
 from ebdev.core.nodes.common import send_progress
-from ebdev.models.schemas import JobResult
+from ebdev.models.graph_state import JobResult
 from ebdev.services.git import GitConflictError, GitService
 
 if TYPE_CHECKING:
-    from ebdev.models.schemas import GraphState
+    from ebdev.models.graph_state import GraphState
 
 # ---------------------------------------------------------------------------
 # Module-level logger
 # ---------------------------------------------------------------------------
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -40,10 +40,10 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 #: Bitbucket REST API v2 base path.
-BITBUCKET_API_BASE: str = "https://api.bitbucket.org/2.0"
+BITBUCKET_API_BASE: str = config.BITBUCKET_API_BASE
 
 #: GitHub REST API v3 base path.
-GITHUB_API_BASE: str = "https://api.github.com"
+GITHUB_API_BASE: str = config.GITHUB_API_BASE
 
 
 # ---------------------------------------------------------------------------
@@ -63,12 +63,12 @@ async def publish_node(state: GraphState) -> GraphState:
     GraphState
         The updated state containing PR URL details.
     """
-    state.last_node = "publish"
+    state.last_node = "publish_agent"
     await send_progress(state, "Publishing changes and creating Pull Requests concurrently...")
-    
+
     ctx = state.context
     platforms = ctx.platforms
-    repo_path = Path(ctx.repo_path)
+    Path(ctx.repo_path)
     branch_name = ctx.generated_branch or ctx.branch
     repo_url = ctx.project_repo or config.BITBUCKET_REPO_URL
 
@@ -91,7 +91,7 @@ async def publish_node(state: GraphState) -> GraphState:
             else:
                 commit_msg = f"feat: [{ctx.ticket.id}] {ctx.feature_name} ({platform})"
                 await asyncio.to_thread(git.commit_all, commit_msg)
-                
+
                 # Resolve platform-specific repo URL
                 plat_repo_url = repo_url
                 if plat_repo_url and len(platforms) > 1:
@@ -118,7 +118,7 @@ async def publish_node(state: GraphState) -> GraphState:
         if plat_repo_url:
             platform_type = "github" if "github.com" in plat_repo_url.lower() else "bitbucket"
             await send_progress(state, f"[{platform}] Creating Pull Request on {platform_type.capitalize()}...")
-            
+
             if platform_type == "github":
                 pr_url = await asyncio.to_thread(_create_github_pr, ctx, branch_name, plat_repo_url)
             else:
@@ -129,7 +129,7 @@ async def publish_node(state: GraphState) -> GraphState:
     try:
         # Run all platform publishers concurrently
         pr_urls = await asyncio.gather(*[publish_single_platform(p) for p in platforms])
-        
+
         # Keep track of first valid PR url (or join them)
         valid_prs = [url for url in pr_urls if url]
         primary_pr = valid_prs[0] if valid_prs else None
@@ -144,7 +144,7 @@ async def publish_node(state: GraphState) -> GraphState:
                     space_name=ctx.space_name,
                     ticket_id=ctx.ticket_id,
                     status="success",
-                    pr_url=primary_pr
+                    pr_url=primary_pr,
                 )
             await send_progress(state, f"Job Successful: PR Created at {primary_pr}")
 
@@ -155,15 +155,13 @@ async def publish_node(state: GraphState) -> GraphState:
         #         plan_file.unlink()
         #         logger.info("Cleanup: Removed plan %s", plan_file)
 
-        return state.model_copy(update={
-            "last_node": "publish",
-            "result": new_result,
-            "pull_request_url": primary_pr
-        })
+        return state.model_copy(
+            update={"last_node": "publish_agent", "result": new_result, "pull_request_url": primary_pr}
+        )
 
     except Exception as e:  # pylint: disable=broad-exception-caught
         logger.error("CRITICAL ERROR in publishing phase: %s", e)
-        return state.model_copy(update={"last_node": "publish"})
+        return state.model_copy(update={"last_node": "publish_agent"})
 
 
 # ---------------------------------------------------------------------------
@@ -195,7 +193,7 @@ def _create_bitbucket_pr(ctx, branch_name: str, repo_url: str | None = None) -> 
     clean_url = repo_url.strip().rstrip("/").replace(".git", "")
     workspace = None
     slug = None
-    
+
     if "git@bitbucket.org:" in clean_url:
         path = clean_url.split("git@bitbucket.org:")[1]
         parts = path.split("/")
@@ -210,15 +208,15 @@ def _create_bitbucket_pr(ctx, branch_name: str, repo_url: str | None = None) -> 
         return None
 
     api_url = f"{BITBUCKET_API_BASE}/repositories/{workspace}/{slug}/pullrequests"
-    
+
     payload = {
         "title": f"PR for {ctx.ticket.id}: {ctx.feature_name}",
-        "source": { "branch": { "name": branch_name } },
-        "destination": { "branch": { "name": ctx.branch or "main" } },
+        "source": {"branch": {"name": branch_name}},
+        "destination": {"branch": {"name": ctx.branch or "main"}},
         "description": f"Generated by EBProcess\n\nRelates to {ctx.ticket.id}",
-        "close_source_branch": False
+        "close_source_branch": False,
     }
-    
+
     user = config.BITBUCKET_USERNAME or config.GIT_USER
     token = config.BITBUCKET_APP_PASSWORD or config.GIT_TOKEN
     try:
@@ -252,32 +250,34 @@ def _create_github_pr(ctx, branch_name: str, repo_url: str | None = None) -> str
         The HTML URL of the created PR, or None if creation failed or skipped.
     """
     if not repo_url:
-        repo_url = ctx.project_repo or config.GITHUB_REPO_URL if hasattr(config, "GITHUB_REPO_URL") else ctx.project_repo
+        repo_url = (
+            ctx.project_repo or config.GITHUB_REPO_URL if hasattr(config, "GITHUB_REPO_URL") else ctx.project_repo
+        )
     if not repo_url:
         return None
 
     url_parts = repo_url.rstrip("/").replace(".git", "").split("/")
     if len(url_parts) < 2:
         return None
-    
+
     repo = url_parts[-1]
     owner = url_parts[-2]
-    
+
     api_url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/pulls"
-    
+
     payload = {
         "title": f"feat: [{ctx.ticket.id}] {ctx.feature_name}",
         "head": branch_name,
         "base": ctx.branch or "main",
-        "body": f"Generated by EBProcess\n\nRelates to {ctx.ticket.id}"
+        "body": f"Generated by EBProcess\n\nRelates to {ctx.ticket.id}",
     }
-    
+
     headers = {
         "Accept": "application/vnd.github+json",
         "Authorization": f"token {config.GITHUB_TOKEN or config.GIT_TOKEN}",
-        "X-GitHub-Api-Version": "2022-11-28"
+        "X-GitHub-Api-Version": "2022-11-28",
     }
-    
+
     try:
         with httpx.Client() as client:
             response = client.post(api_url, json=payload, headers=headers)

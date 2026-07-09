@@ -27,3 +27,6 @@ workspace/
 
 # Local secrets — never commit
 .env
+
+# Postgres data storage
+.postgres_data/

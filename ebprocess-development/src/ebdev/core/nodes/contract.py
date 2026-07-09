@@ -12,15 +12,14 @@ Responsibilities
 
 from __future__ import annotations
 
-import logging
-
+from ebdev.core.logger import get_logger
 from ebdev.core.nodes.common import send_progress
-from ebdev.models.schemas import GraphState
+from ebdev.models.graph_state import GraphState
 
 # ---------------------------------------------------------------------------
 # Module-level logger
 # ---------------------------------------------------------------------------
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -43,7 +42,7 @@ async def contract_node(state: GraphState) -> GraphState:
     GraphState
         The updated state with the contract verification status recorded.
     """
-    state.last_node = "contract"
+    state.last_node = "contract_agent"
     ctx = state.context
     platforms = ctx.platforms
 
@@ -52,11 +51,8 @@ async def contract_node(state: GraphState) -> GraphState:
     if "api" in platforms and "flutter" in platforms:
         # Cross-platform contract validation mock
         logger.info("Concurrently verifying API schemas against Flutter client models...")
-        await send_progress(
-            state,
-            "Client-Server Contract Check: Verified API models are aligned with Mobile models."
-        )
+        await send_progress(state, "Client-Server Contract Check: Verified API models are aligned with Mobile models.")
     else:
         logger.info("Single platform %s running. Skipping contract integration checks.", platforms)
 
-    return state
+    return state.model_copy(update={"last_node": "contract_agent"})
