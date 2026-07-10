@@ -160,9 +160,7 @@ class JobContext(BaseModel):
         # its parent is the repository root workspace/<SPACE_NAME>/
         repo_root = repo_path.parent if repo_path.resolve().parent.parent == workspace_dir else repo_path
 
-        storage = repo_root / ".ebpearls"
-        storage.mkdir(parents=True, exist_ok=True)
-        return storage
+        return repo_root / ".ebpearls"
 
     def platform_dir_name(self, platform: str) -> str:
         """Get the customized directory name for a platform under multi-platform workspaces."""
