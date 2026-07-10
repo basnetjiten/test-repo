@@ -116,8 +116,7 @@ async def orchestrate_node(state: GraphState) -> GraphState:
             task_details=task_details if task_details else None,
         )
         server_url = config.OPENCODE_SERVER_URL or DEFAULT_OPENCODE_SERVER_URL
-        directory = str(to_container_path(Path(ctx.repo_path or Path(config.WORKSPACE_DIR) / ctx.space_name)))
-        client = OpenCodeAPIClient(base_url=server_url, api_key=config.OPENCODE_API_KEY, directory=directory)
+        client = OpenCodeAPIClient(base_url=server_url, api_key=config.OPENCODE_API_KEY)
 
         session_id = await client.create_session(title=f"Orchestrator-{ticket_id}")
         res = await client.send_prompt_message(

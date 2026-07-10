@@ -1,5 +1,6 @@
 import asyncio
 import os
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict, List
@@ -224,7 +225,9 @@ class ExecutePipelineRequest(BaseModel):
 
                 # Set request level fields
                 first_epic = converted_epics[0] if converted_epics else {}
-                default_space = os.environ.get("SPACE_NAME") or data.get("space_name") or "tobeme"
+                plan_name = planning.get("name") or first_epic.get("title") or "project_workspace"
+                slugified_name = re.sub(r'[\W_]+', '-', str(plan_name).lower()).strip('-')
+                default_space = os.environ.get("SPACE_NAME") or data.get("space_name") or slugified_name
 
                 data["id"] = data.get("id") or planning.get("id") or 918
                 data["space_name"] = default_space
@@ -327,7 +330,7 @@ async def execute_pipeline(request: ExecutePipelineRequest):
     )
 
     initial_state = GraphState(context=context, done=False, failed=False)
-    config: RunnableConfig = {"configurable": {"thread_id": f"thread-{request.ticket_id}"}}
+    run_config: RunnableConfig = {"configurable": {"thread_id": f"thread-{request.ticket_id}"}}
 
     try:
         # ------------------------------------------------------------------
@@ -373,7 +376,7 @@ async def execute_pipeline(request: ExecutePipelineRequest):
         # or failed mid-execution and can be resumed.
         existing_state = None
         try:
-            existing_state = await graph.aget_state(config)
+            existing_state = await graph.aget_state(run_config)
         except Exception as exc:
             logger.warning(
                 "Failed to retrieve checkpoint state for %s: %s. Starting fresh.",
@@ -398,18 +401,18 @@ async def execute_pipeline(request: ExecutePipelineRequest):
                             exc,
                             exc_info=True,
                         )
-                final_state = await _invoke_with_retry(graph, initial_state, config)
+                final_state = await _invoke_with_retry(graph, initial_state, run_config)
             elif existing_state.next:
                 logger.info("Resuming pipeline from checkpoint for %s (pending: %s)", request.ticket_id, existing_state.next)
-                final_state = await _invoke_with_retry(graph, None, config)
+                final_state = await _invoke_with_retry(graph, None, run_config)
                 was_resumed = True
             else:
                 logger.info("Pipeline already finished for %s. Returning existing final state.", request.ticket_id)
-                final_state = await _invoke_with_retry(graph, initial_state, config)
+                final_state = await _invoke_with_retry(graph, initial_state, run_config)
         else:
             logger.info("Starting fresh pipeline for %s.", request.ticket_id)
-            final_state = await _invoke_with_retry(graph, initial_state, config)
-
+            final_state = await _invoke_with_retry(graph, initial_state, run_config)
+        
         result = final_state.get("result")
         if result:
             return {
