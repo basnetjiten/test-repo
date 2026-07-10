@@ -213,10 +213,7 @@ class ExecutePipelineRequest(BaseModel):
                         ])),
                         "tasks": epic_tasks,
                         "acceptance_criteria": [],
-                        "estimated_hours": sum(
-                            float(t.get("originalEstimateHour") or 0.0)
-                            for t in epic.get("tasks") or []
-                        )
+                        "estimated_hours": 0.0
                     })
                     all_tasks.extend(epic_tasks)
 

@@ -23,20 +23,6 @@ logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-def _task_total_hours(task: EpicTask) -> float:
-    return round(sum(hour.estimatedHour for hour in task.hours), 1)
-
-
-def _estimate_range(hours: float) -> tuple[str, str, str]:
-    optimistic = max(hours * 0.75, 0.5)
-    realistic = max(hours, 0.5)
-    pessimistic = max(hours * 1.5, 0.5)
-    return (f"{optimistic:.1f}h", f"{realistic:.1f}h", f"{pessimistic:.1f}h")
-
-
-# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 def compute_epic_waves(epics: Sequence[SPOQMapEpic]) -> list[list[str]]:

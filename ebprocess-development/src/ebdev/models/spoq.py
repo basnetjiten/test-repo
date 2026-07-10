@@ -43,7 +43,6 @@ class SPOQMapEpic(BaseModel):
     tasks: List[EpicTask] = Field(default_factory=list)
     acceptance_criteria: List[str] = Field(default_factory=list)
     path: Optional[str] = None
-    estimated_hours: float = 0.0
 
     @model_validator(mode="after")
     def _normalize(self) -> "SPOQMapEpic":
@@ -53,12 +52,6 @@ class SPOQMapEpic(BaseModel):
             for task in self.tasks:
                 platforms.extend(task.active_platforms)
             self.platforms = list(dict.fromkeys(platforms))
-
-        if not self.estimated_hours and self.tasks:
-            total_hours = 0.0
-            for task in self.tasks:
-                total_hours += sum(hour.estimatedHour for hour in task.hours)
-            self.estimated_hours = round(total_hours, 1)
 
         return self
 
@@ -86,6 +79,6 @@ class SPOQMap(BaseModel):
             self.epic_dependencies = {epic.id: list(epic.depends_on) for epic in self.epics}
 
         if not self.estimated_effort and self.epics:
-            self.estimated_effort = {epic.id: epic.estimated_hours for epic in self.epics}
+            self.estimated_effort = {epic.id: 0.0 for epic in self.epics}
 
         return self

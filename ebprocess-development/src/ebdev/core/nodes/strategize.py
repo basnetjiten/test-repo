@@ -104,8 +104,7 @@ async def orchestrate_node(state: GraphState) -> GraphState:
             for t in ctx.ticket.tasks:
                 task_details.append(
                     f'  - Task {t.id}: "{t.name}" '
-                    f"(platforms: {', '.join(t.active_platforms)}, "
-                    f"estimated: {sum(h.estimatedHour for h in t.hours):.1f}h)"
+                    f"(platforms: {', '.join(t.active_platforms)})"
                 )
 
         prompt = build_orchestrator_prompt(

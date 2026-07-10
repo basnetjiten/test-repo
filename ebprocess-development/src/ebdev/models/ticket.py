@@ -19,36 +19,24 @@ class EpicTaskPlatform(BaseModel):
     name: str
 
 
-class EpicTaskHour(BaseModel):
-    """Represents estimated hour details for a task on a specific platform."""
-
-    estimatedHour: float  # noqa: N815 — external API field
-    taskId: int  # noqa: N815 — external API field
-    platformId: int  # noqa: N815 — external API field
-    platform: EpicTaskPlatform
-
-
 class EpicTask(BaseModel):
-    """Represents a specific task associated with an epic, containing estimated hours by platform."""
+    """Represents a specific task associated with an epic."""
 
     id: int
     name: str
     status: str
-    hours: List[EpicTaskHour] = Field(default_factory=list)
+    platform: Optional[EpicTaskPlatform] = None
+    platformId: Optional[int] = None
 
     @property
     def active_platforms(self) -> List[str]:
         """Return lowercase platform names that have > 0 estimated hours."""
-        active = []
-        for h in self.hours:
-            if h.estimatedHour > 0:
-                plat_name = h.platform.name.lower()
-                # Map standard names to internal keys if necessary
-                if plat_name == "web app":
-                    active.append("web")
-                else:
-                    active.append(plat_name)
-        return list(dict.fromkeys(active))
+        if not self.platform:
+            return []
+        plat_name = self.platform.name.lower()
+        if plat_name == "web app":
+            return ["web"]
+        return [plat_name]
 
 
 class SprintTicket(BaseModel):

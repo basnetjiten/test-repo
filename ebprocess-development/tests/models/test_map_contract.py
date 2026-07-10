@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from ebdev.core.spoq_map import build_epic_tasks, compute_epic_waves
 from ebdev.models.spoq import SPOQMapEpic
-from ebdev.models.ticket import EpicTask, EpicTaskHour, EpicTaskPlatform
+from ebdev.models.ticket import EpicTask, EpicTaskPlatform
 
 
 def main() -> None:
@@ -36,52 +36,43 @@ def main() -> None:
     assert waves == [["Epic-A"], ["Epic-B"]], f"Expected 2 waves, got {waves}"
 
     # --- Task DAG building (no disk) ---
-    task = EpicTask(
+    task_api = EpicTask(
         id=101,
-        name="Test Task",
+        name="Test Task API",
         status="todo",
-        hours=[
-            EpicTaskHour(
-                estimatedHour=1.0,
-                taskId=101,
-                platformId=1,
-                platform=EpicTaskPlatform(id=1, name="api"),
-            ),
-            EpicTaskHour(
-                estimatedHour=1.0,
-                taskId=101,
-                platformId=2,
-                platform=EpicTaskPlatform(id=2, name="flutter"),
-            ),
-        ],
+        platform=EpicTaskPlatform(id=1, name="api"),
+        platformId=1,
+    )
+    task_flutter = EpicTask(
+        id=102,
+        name="Test Task Flutter",
+        status="todo",
+        platform=EpicTaskPlatform(id=2, name="flutter"),
+        platformId=2,
     )
 
     epic_task = SPOQMapEpic(
         id="Epic-T1",
         title="Task Epic",
-        description="Epic with dual-platform tasks",
-        tasks=[task],
+        description="Epic with tasks",
+        tasks=[task_api, task_flutter],
         platforms=["api", "flutter"],
     )
 
     spoq_tasks = build_epic_tasks(epic_task)
-    assert len(spoq_tasks) >= 3, (
-        f"Expected at least 3 tasks (contract + api-impl + flutter-impl), got {len(spoq_tasks)}"
+    assert len(spoq_tasks) >= 4, (
+        f"Expected at least 4 tasks (contracts + impls), got {len(spoq_tasks)}"
     )
 
-    # Verify dependency chain: contract -> api-impl -> flutter-impl
-    contract_task = next(t for t in spoq_tasks if t.id.startswith("contract-"))
-    api_task = next(t for t in spoq_tasks if t.id.startswith("api-impl-"))
-    flutter_task = next(t for t in spoq_tasks if t.id.startswith("flutter-impl-"))
+    # Verify dependency chain for api task
+    contract_task = next(t for t in spoq_tasks if t.id == "contract-101")
+    api_task = next(t for t in spoq_tasks if t.id == "api-impl-101")
 
     assert contract_task.phase == 0, "Contract task should be wave 0"
     assert contract_task.status == "pending"
     assert contract_task.dependencies == []
 
     assert api_task.dependencies == [contract_task.id], "API impl should depend on contract"
-    assert flutter_task.dependencies == [contract_task.id, api_task.id], (
-        "Flutter impl should depend on contract + API impl"
-    )
 
     print("SPOQ map computation checks passed.")
 
