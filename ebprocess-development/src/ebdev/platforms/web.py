@@ -21,6 +21,7 @@ from pathlib import Path
 from ebdev.core.exceptions import PlatformStrategyError
 from ebdev.core.logger import get_logger
 from ebdev.platforms.base import PlatformStrategy
+from ebdev.services.fs import AsyncFileSystemService
 
 # ---------------------------------------------------------------------------
 # Module-level logger
@@ -57,7 +58,7 @@ class WebStrategy(PlatformStrategy):
         logger.info("Preparing Web repository at %s", repo_path)
         package_json = repo_path / "package.json"
 
-        if package_json.exists():
+        if await AsyncFileSystemService.exists(package_json):
             logger.info("Detected Next.js/React project. Installing node modules...")
             returncode, stdout, stderr = await self._run_command(
                 ["npm", "install", "--legacy-peer-deps", "--engine-strict=false"], repo_path
@@ -72,6 +73,17 @@ class WebStrategy(PlatformStrategy):
             else:
                 logger.info("Next.js/React dependencies installed successfully.")
 
+            # Rebuild native packages to resolve host-container architecture mismatch
+            logger.info("Rebuilding native dependencies inside container...")
+            rb_code, rb_out, rb_err = await self._run_command(["npm", "rebuild"], repo_path)
+            if rb_code != 0:
+                logger.warning(
+                    "npm rebuild returned non-zero. stderr: %s",
+                    rb_err.decode().strip(),
+                )
+            else:
+                logger.info("Native dependencies rebuilt successfully.")
+
     async def validate(self, repo_path: Path) -> list[str]:
         """
         Validate Web workspace layout and linting.
@@ -80,7 +92,7 @@ class WebStrategy(PlatformStrategy):
         package_json = repo_path / "package.json"
         errors: list[str] = []
 
-        if package_json.exists():
+        if await AsyncFileSystemService.exists(package_json):
             logger.info("Identifying modified and untracked TypeScript/TSX files in Web workspace...")
             rc, stdout, _stderr = await self._run_command(["git", "status", "--porcelain"], repo_path)
             changed_files: list[str] = []
@@ -115,8 +127,7 @@ class WebStrategy(PlatformStrategy):
                 logger.info("No changed TS/TSX files detected. Skipping linting.")
 
             try:
-                with open(package_json, "r", encoding="utf-8") as f:
-                    pkg_data = json.load(f)
+                pkg_data = await AsyncFileSystemService.read_json(package_json)
                 scripts = pkg_data.get("scripts", {})
                 if "test" in scripts:
                     logger.info("Running Next.js tests...")

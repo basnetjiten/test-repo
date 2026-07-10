@@ -126,6 +126,17 @@ class ApiStrategy(PlatformStrategy):
                 )
             else:
                 logger.info("NestJS/Node dependencies installed successfully.")
+
+            # Rebuild native packages to resolve host-container architecture mismatch
+            logger.info("Rebuilding native dependencies inside container...")
+            rb_code, rb_out, rb_err = await self._run_command(["npm", "rebuild"], repo_path)
+            if rb_code != 0:
+                logger.warning(
+                    "npm rebuild returned non-zero. stderr: %s",
+                    rb_err.decode().strip(),
+                )
+            else:
+                logger.info("Native dependencies rebuilt successfully.")
         elif await AsyncFileSystemService.exists(req_txt):
             # Python standard layout - install requirements
             logger.info("Detected python pip requirements. Installing dependency bundle...")
