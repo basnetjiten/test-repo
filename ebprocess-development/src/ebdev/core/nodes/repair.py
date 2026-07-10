@@ -182,6 +182,10 @@ async def repair_node(state: GraphState) -> GraphState:
             failed_errors.append(f"--- platform {p} ---")
             plat_prefix = f"[{p}]"
             plat_errs = [e for e in ctx.validation_errors if e.startswith(plat_prefix)]
+            if not plat_errs and state.platform_results:
+                for k, res in state.platform_results.items():
+                    if (k == p or k.endswith(f"_{p}")) and res.status == "failed" and res.errors:
+                        plat_errs.extend(res.errors)
             if plat_errs:
                 failed_errors.extend(plat_errs)
             else:
@@ -195,6 +199,10 @@ async def repair_node(state: GraphState) -> GraphState:
         for p in failed_plats:
             plat_prefix = f"[{p}]"
             plat_errs = [e[len(plat_prefix):].strip() for e in ctx.validation_errors if e.startswith(plat_prefix)]
+            if not plat_errs and state.platform_results:
+                for k, res in state.platform_results.items():
+                    if (k == p or k.endswith(f"_{p}")) and res.status == "failed" and res.errors:
+                        plat_errs.extend(res.errors)
             if plat_errs:
                 flat_errors.append(f"{p}: {'; '.join(plat_errs)}")
             else:
