@@ -263,11 +263,11 @@ MAX_RETRIES = config.MAX_RETRIES
 RETRY_BACKOFF_BASE = config.RETRY_BACKOFF_BASE
 
 
-async def _invoke_with_retry(graph: Any, initial_state: GraphState | None, config: RunnableConfig) -> Dict[str, Any]:
+async def _invoke_with_retry(graph: Any, initial_state: GraphState | None, run_config: RunnableConfig) -> Dict[str, Any]:
     last_exc: Exception | None = None
     for attempt in range(MAX_RETRIES):
         try:
-            return await graph.ainvoke(initial_state, config=config, durability="async")
+            return await graph.ainvoke(initial_state, config=run_config, durability="async")
         except Exception as exc:
             if _is_transient_db_error(exc):
                 last_exc = exc
