@@ -125,9 +125,11 @@ async def orchestrate_node(state: GraphState) -> GraphState:
             prompt=prompt,
             model=config.OPENCODE_MODEL,
         )
+        logger.info("OpenCode raw response: %s", json.dumps(res, indent=2))
 
         parts = res.get("parts", [])
         reply_text = "".join(p.get("text", "") for p in parts if p.get("type") == "text")
+        logger.info("Extracted reply text: %s", reply_text)
 
         data = None
         try:
