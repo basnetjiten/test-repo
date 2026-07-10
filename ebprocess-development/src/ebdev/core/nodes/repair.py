@@ -190,6 +190,17 @@ async def repair_node(state: GraphState) -> GraphState:
         prev_errors = state.result.errors if state.result else []
         new_errors = failed_errors + prev_errors + [f"--- Repair attempt iteration {iteration} ---"]
 
+        # Format a clean flat summary of current validation errors for the progress report
+        flat_errors = []
+        for p in failed_plats:
+            plat_prefix = f"[{p}]"
+            plat_errs = [e[len(plat_prefix):].strip() for e in ctx.validation_errors if e.startswith(plat_prefix)]
+            if plat_errs:
+                flat_errors.append(f"{p}: {'; '.join(plat_errs)}")
+            else:
+                flat_errors.append(f"{p}: Unknown validation error")
+        error_summary = " | ".join(flat_errors)
+
         if iteration >= config.MAX_REPAIR_ITERATIONS:
             failed_result = JobResult(
                 task_id=ctx.ticket_id,
@@ -202,7 +213,7 @@ async def repair_node(state: GraphState) -> GraphState:
 
             await send_progress(
                 state,
-                f"Max repair iterations reached. Job failed with platforms unresolved: {failed_plats}",
+                f"Max repair iterations reached. Job failed with platforms unresolved: {failed_plats}. Errors: {error_summary}",
             )
             # Mark all in-progress tasks as needs_review in the artifact registry.
             await _write_repair_state(
@@ -242,7 +253,7 @@ async def repair_node(state: GraphState) -> GraphState:
 
         await send_progress(
             state,
-            f"Initiating repair retry iteration {iteration} for platforms: {failed_plats}...",
+            f"Initiating repair retry iteration {iteration} for platforms: {failed_plats}. Errors: {error_summary}",
         )
         # Advance repair_iteration in the artifact registry.
         await _write_repair_state(
