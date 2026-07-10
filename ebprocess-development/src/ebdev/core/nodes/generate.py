@@ -27,6 +27,7 @@ from ebdev.core.nodes.common import send_progress
 from ebdev.core.spoq_utils import get_state_active_tasks
 from ebdev.models.graph_state import JobResult
 from ebdev.services import db
+from ebdev.services.fs import AsyncFileSystemService
 from ebdev.services.opencode import invoke_opencode
 
 if TYPE_CHECKING:
@@ -161,9 +162,9 @@ async def generate_node(state: GraphState) -> GraphState:
             if journal_path_str:
                 # Resolve absolute path using project storage dir parent as base
                 journal_path = Path(ctx.project_storage_dir().parent) / journal_path_str
-                if journal_path.exists():
+                if await AsyncFileSystemService.exists(journal_path):
                     try:
-                        content = journal_path.read_text(encoding="utf-8")
+                        content = await AsyncFileSystemService.read_text(journal_path)
                         if "## Remediation" in content:
                             remediation_content = content.split("## Remediation")[1].strip()
                             logger.info("%s Injected repair_journal from evaluation journal file", task_label)
@@ -281,8 +282,8 @@ async def generate_node(state: GraphState) -> GraphState:
         try:
             flutter_path = ctx.platform_path("flutter")
             graphql_file = flutter_path / "lib" / "graphql" / "schema.graphql"
-            if graphql_file.exists():
-                updated_shared_context["graphql_schema"] = graphql_file.read_text(encoding="utf-8")
+            if await AsyncFileSystemService.exists(graphql_file):
+                updated_shared_context["graphql_schema"] = await AsyncFileSystemService.read_text(graphql_file)
                 logger.info("Captured GraphQL schema from %s", graphql_file.name)
         except Exception as e:
             logger.warning("Failed to check/read GraphQL schema: %s", e)
@@ -290,8 +291,8 @@ async def generate_node(state: GraphState) -> GraphState:
         try:
             api_path = ctx.platform_path("api")
             openapi_file = api_path / "swagger.json"
-            if openapi_file.exists():
-                updated_shared_context["api_schema"] = openapi_file.read_text(encoding="utf-8")
+            if await AsyncFileSystemService.exists(openapi_file):
+                updated_shared_context["api_schema"] = await AsyncFileSystemService.read_text(openapi_file)
                 logger.info("Captured OpenAPI JSON spec from %s", openapi_file.name)
         except Exception as e:
             logger.warning("Failed to check/read OpenAPI spec: %s", e)

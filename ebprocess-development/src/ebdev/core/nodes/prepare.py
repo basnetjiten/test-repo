@@ -27,6 +27,7 @@ from ebdev.core.logger import get_logger
 from ebdev.core.name_utils import extract_feature_name, sanitize_branch_name
 from ebdev.core.nodes.common import send_progress
 from ebdev.platforms import get_platform_strategy
+from ebdev.services.fs import AsyncFileSystemService
 from ebdev.services.git import GitConflictError, GitService, RemoteRepoService
 
 if TYPE_CHECKING:
@@ -87,13 +88,13 @@ async def prepare_node(state: GraphState) -> GraphState:
             repo_path = Path(config.WORKSPACE_DIR) / workspace_id
             ctx.repo_path = str(repo_path)
 
-        repo_path.mkdir(parents=True, exist_ok=True)
+        await AsyncFileSystemService.ensure_directory(repo_path)
         logger.info("Parent Workspace resolved to: %s", repo_path)
 
         # 2. Async Strategy Execution Function
         async def prepare_single_platform(platform: str) -> None:
             plat_path = ctx.platform_path(platform)
-            plat_path.mkdir(parents=True, exist_ok=True)
+            await AsyncFileSystemService.ensure_directory(plat_path)
             logger.info("[%s] Preparing platform workspace in: %s", platform, plat_path)
 
             git = GitService(plat_path)

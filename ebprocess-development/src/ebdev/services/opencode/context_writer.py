@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ebdev.core.logger import get_logger
+from ebdev.services.fs import AsyncFileSystemService
 from ebdev.services.prompts import to_container_path
 
 if TYPE_CHECKING:
@@ -188,7 +189,7 @@ class EpicContextWriter:
     # Public API
     # ------------------------------------------------------------------
 
-    def write_epic_manifest(
+    async def write_epic_manifest(
         self,
         job_context: "JobContext",
         epic_dir: Path,
@@ -214,7 +215,6 @@ class EpicContextWriter:
         Path
             Absolute path to the written (or existing) ``context.json``.
         """
-        epic_dir.mkdir(parents=True, exist_ok=True)
         manifest_path = epic_dir / MANIFEST_FILENAME
         sidecar_path = epic_dir / _MANIFEST_HASH_SIDECAR
 
@@ -223,9 +223,9 @@ class EpicContextWriter:
         new_hash = _compute_sha256(serialized)
 
         # Skip re-write if content is unchanged (idempotency guard)
-        if sidecar_path.exists():
+        if await AsyncFileSystemService.exists(sidecar_path):
             try:
-                existing_hash = sidecar_path.read_text(encoding="utf-8").strip()
+                existing_hash = (await AsyncFileSystemService.read_text(sidecar_path)).strip()
                 if existing_hash == new_hash:
                     logger.debug(
                         "EpicManifest unchanged (hash=%s). Skipping write: %s",
@@ -233,12 +233,12 @@ class EpicContextWriter:
                         manifest_path.name,
                     )
                     return manifest_path
-            except OSError as exc:
+            except Exception as exc:
                 logger.warning("Could not read manifest hash sidecar: %s", exc)
 
         # Write manifest and update sidecar atomically (sidecar last)
-        manifest_path.write_text(serialized, encoding="utf-8")
-        sidecar_path.write_text(new_hash, encoding="utf-8")
+        await AsyncFileSystemService.write_text_atomic(manifest_path, serialized)
+        await AsyncFileSystemService.write_text_atomic(sidecar_path, new_hash)
 
         logger.info(
             "EpicManifest written (hash=%s): %s",
@@ -247,7 +247,7 @@ class EpicContextWriter:
         )
         return manifest_path
 
-    def write_platform_slice(
+    async def write_platform_slice(
         self,
         job_context: "JobContext",
         epic_dir: Path,
@@ -266,7 +266,7 @@ class EpicContextWriter:
         ----------
         job_context:
             The full pipeline job context, already scoped to the target
-            platform by the calling node.
+            platform by the calling node before ``write_context`` is called).
         epic_dir:
             The target epic directory.
         platform:
@@ -277,13 +277,12 @@ class EpicContextWriter:
         Path
             Absolute path to the written ``context_{platform}.json``.
         """
-        epic_dir.mkdir(parents=True, exist_ok=True)
         slice_path = epic_dir / f"context_{platform}.json"
 
         payload = _build_platform_slice_payload(job_context, platform)
         serialized = json.dumps(payload, indent=2, ensure_ascii=False)
 
-        slice_path.write_text(serialized, encoding="utf-8")
+        await AsyncFileSystemService.write_text_atomic(slice_path, serialized)
         logger.info(
             "PlatformSlice written (%d task_contexts for '%s'): %s",
             len(payload["task_contexts"]),
@@ -296,7 +295,7 @@ class EpicContextWriter:
     # Unified entry point (used by OpenCodeService.write_context)
     # ------------------------------------------------------------------
 
-    def write_context(
+    async def write_context(
         self,
         job_context: "JobContext",
         storage_dir: Path,
@@ -328,10 +327,10 @@ class EpicContextWriter:
             the manifest path.
         """
         epic_dir = self._resolve_epic_dir(job_context, storage_dir)
-        self.write_epic_manifest(job_context, epic_dir)
+        await self.write_epic_manifest(job_context, epic_dir)
 
         if platform:
-            return self.write_platform_slice(job_context, epic_dir, platform)
+            return await self.write_platform_slice(job_context, epic_dir, platform)
 
         return epic_dir / MANIFEST_FILENAME
 

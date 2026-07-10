@@ -20,6 +20,7 @@ from ebdev.core.exceptions import PlatformStrategyError
 from ebdev.core.logger import get_logger
 from ebdev.platforms.base import PlatformStrategy
 from ebdev.services import flutter_cmd
+from ebdev.services.fs import AsyncFileSystemService
 
 # ---------------------------------------------------------------------------
 # Module-level logger
@@ -51,7 +52,7 @@ class FlutterStrategy(PlatformStrategy):
         """
         logger.info("Preparing Flutter repository at %s", repo_path)
         pubspec = repo_path / "pubspec.yaml"
-        if not pubspec.exists():
+        if not await AsyncFileSystemService.exists(pubspec):
             logger.warning("No pubspec.yaml found at %s. Skipping dependency resolution and build_runner.", repo_path)
             return
 
@@ -90,7 +91,7 @@ class FlutterStrategy(PlatformStrategy):
         # Guard: if there is no pubspec.yaml the workspace is a sparse/lib-only checkout.
         # We can only validate individual Dart files — skip full project analysis.
         pubspec = repo_path / "pubspec.yaml"
-        if not pubspec.exists():
+        if not await AsyncFileSystemService.exists(pubspec):
             logger.warning(
                 "No pubspec.yaml found at %s — sparse checkout detected. "
                 "Skipping full Flutter analysis; treating as PASS.",
@@ -160,11 +161,11 @@ class FlutterStrategy(PlatformStrategy):
         internal imports in the codebase (.dart files) to use the new package name.
         """
         pubspec_path = repo_path / "pubspec.yaml"
-        if not pubspec_path.exists():
+        if not await AsyncFileSystemService.exists(pubspec_path):
             return
 
         # 1. Read pubspec.yaml and find the old package name
-        content = pubspec_path.read_text(encoding="utf-8")
+        content = await AsyncFileSystemService.read_text(pubspec_path)
         match = re.search(r"^name:\s*([a-zA-Z0-9_\-]+)", content, re.MULTILINE)
         if not match:
             logger.warning("Could not find name field in pubspec.yaml at %s", pubspec_path)
@@ -179,15 +180,15 @@ class FlutterStrategy(PlatformStrategy):
 
         # 2. Update the name: field inside pubspec.yaml
         new_content = content.replace(f"name: {old_package_name}", f"name: {new_name}", 1)
-        pubspec_path.write_text(new_content, encoding="utf-8")
+        await AsyncFileSystemService.write_text_atomic(pubspec_path, new_content)
 
         # 3. Update build.yaml ferry schema references (schema: old_name| -> schema: new_name|)
         build_yaml_path = repo_path / "build.yaml"
-        if build_yaml_path.exists():
-            build_content = build_yaml_path.read_text(encoding="utf-8")
+        if await AsyncFileSystemService.exists(build_yaml_path):
+            build_content = await AsyncFileSystemService.read_text(build_yaml_path)
             updated_build = build_content.replace(f"schema: {old_package_name}|", f"schema: {new_name}|")
             if updated_build != build_content:
-                build_yaml_path.write_text(updated_build, encoding="utf-8")
+                await AsyncFileSystemService.write_text_atomic(build_yaml_path, updated_build)
                 logger.info("Updated build.yaml schema references from %r to %r", old_package_name, new_name)
 
         # 4. Recursively refactor all imports in .dart files under lib/ and test/
@@ -198,13 +199,13 @@ class FlutterStrategy(PlatformStrategy):
         new_import_prefix = f"package:{new_name}/"
 
         for folder in (lib_dir, test_dir):
-            if not folder.exists():
+            if not await AsyncFileSystemService.exists(folder):
                 continue
             for file_path in folder.glob("**/*.dart"):
                 try:
-                    code = file_path.read_text(encoding="utf-8")
+                    code = await AsyncFileSystemService.read_text(file_path)
                     if old_import_prefix in code:
                         updated_code = code.replace(old_import_prefix, new_import_prefix)
-                        file_path.write_text(updated_code, encoding="utf-8")
+                        await AsyncFileSystemService.write_text_atomic(file_path, updated_code)
                 except Exception as e:
                     logger.error("Failed to refactor Dart imports in %s: %s", file_path, e)

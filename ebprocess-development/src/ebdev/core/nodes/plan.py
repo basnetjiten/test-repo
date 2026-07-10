@@ -28,6 +28,7 @@ from ebdev.models.graph_state import JobResult
 from ebdev.models.spoq import SPOQTask
 from ebdev.models.task import TaskArtifacts, TaskArtifactState, TaskStatus
 from ebdev.services.epic_state import get_epic_state_service
+from ebdev.services.fs import AsyncFileSystemService
 from ebdev.services.opencode import invoke_opencode
 
 if TYPE_CHECKING:
@@ -171,14 +172,16 @@ async def plan_node(state: GraphState) -> GraphState:
         else:
             plan_file_dir = ctx.project_storage_dir() / (task_id or "default")
             plan_file = plan_file_dir / f"plan_{platform}.md"
-        plan_file.parent.mkdir(parents=True, exist_ok=True)
+        await AsyncFileSystemService.ensure_directory(plan_file.parent)
 
         # Check if plan already successfully generated/recorded in GraphState
         existing_art = state.generated_artifacts.get(task_id, {})
+        plan_exists = await AsyncFileSystemService.exists(plan_file)
+        plan_size = (await asyncio.to_thread(plan_file.stat)).st_size if plan_exists else 0
         if (
             existing_art.get("status") in ("pending_build", "building", "evaluating", "repairing", "passed", "needs_review")
-            and plan_file.exists()
-            and plan_file.stat().st_size > 50
+            and plan_exists
+            and plan_size > 50
         ):
             logger.info("%s Plan already exists in registry, skipping plan generation", task_label)
             return (
@@ -193,7 +196,7 @@ async def plan_node(state: GraphState) -> GraphState:
                 plan_file,
             )
 
-        if plan_file.exists() and plan_file.stat().st_size > 50:
+        if plan_exists and plan_size > 50:
             logger.info("%s Plan already exists and valid on disk, skipping plan generation", task_label)
             # Ensure the artifact registry reflects the idempotency skip so
             # downstream agents see this task as already planned.
@@ -230,14 +233,16 @@ async def plan_node(state: GraphState) -> GraphState:
 
         # Verify plan output
         if result.status == "success":
-            if not plan_file.exists():
+            plan_exists = await AsyncFileSystemService.exists(plan_file)
+            plan_size = (await asyncio.to_thread(plan_file.stat)).st_size if plan_exists else 0
+            if not plan_exists:
                 result = result.model_copy(
                     update={
                         "status": "failed",
                         "errors": (result.errors or []) + [f"Plan file {plan_file.name} missing."],
                     }
                 )
-            elif plan_file.stat().st_size < 50:
+            elif plan_size < 50:
                 result = result.model_copy(
                     update={
                         "status": "failed",
@@ -248,7 +253,7 @@ async def plan_node(state: GraphState) -> GraphState:
                 logger.info(
                     "%s Verified plan file size: %d bytes",
                     task_label,
-                    plan_file.stat().st_size,
+                    plan_size,
                 )
                 # Register the generated contract artifact in state.json.
                 if ctx.spoq_epic_dir and result.status == "success":

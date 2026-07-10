@@ -28,6 +28,7 @@ from ebdev.models.task import TaskArtifacts, TaskArtifactState
 from ebdev.platforms import get_platform_strategy
 from ebdev.services import db
 from ebdev.services.epic_state import get_epic_state_service
+from ebdev.services.fs import AsyncFileSystemService
 from ebdev.services.opencode import invoke_opencode
 
 if TYPE_CHECKING:
@@ -129,7 +130,7 @@ async def _write_validation_state(
             else:
                 journals_dir = epic_dir / "journals"
                 candidate = journals_dir / f"{task_id}.evaluation.md"
-                if candidate.exists():
+                if await AsyncFileSystemService.exists(candidate):
                     try:
                         journal_rel = str(candidate.relative_to(ctx.project_storage_dir().parent))
                     except ValueError:
@@ -338,7 +339,7 @@ async def validate_node(state: GraphState) -> GraphState:
                     journal_rel = existing.get("journal") or ""
                     if not journal_rel and epic_dir:
                         candidate = epic_dir / "journals" / f"{task_id}.evaluation.md"
-                        if candidate.exists():
+                        if await AsyncFileSystemService.exists(candidate):
                             try:
                                 journal_rel = str(candidate.relative_to(ctx.project_storage_dir().parent))
                             except ValueError:
@@ -399,7 +400,7 @@ async def validate_node(state: GraphState) -> GraphState:
                         journal_rel = existing.get("journal") or ""
                         if not journal_rel and epic_dir:
                             candidate = epic_dir / "journals" / f"{task_id}.evaluation.md"
-                            if candidate.exists():
+                            if await AsyncFileSystemService.exists(candidate):
                                 try:
                                     journal_rel = str(candidate.relative_to(ctx.project_storage_dir().parent))
                                 except ValueError:

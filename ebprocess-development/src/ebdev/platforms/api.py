@@ -22,6 +22,7 @@ from pathlib import Path
 from ebdev.core.exceptions import PlatformStrategyError
 from ebdev.core.logger import get_logger
 from ebdev.platforms.base import PlatformStrategy
+from ebdev.services.fs import AsyncFileSystemService
 
 # ---------------------------------------------------------------------------
 # Module-level logger
@@ -79,12 +80,12 @@ class ApiStrategy(PlatformStrategy):
         req_txt = repo_path / "requirements.txt"
         pyproj = repo_path / "pyproject.toml"
 
-        if package_json.exists():
+        if await AsyncFileSystemService.exists(package_json):
             # Fix ESLint flat config file if it has legacy formatting (misconfigured starter kit)
             eslint_flat_config = repo_path / "eslint.config.js"
-            if eslint_flat_config.exists():
+            if await AsyncFileSystemService.exists(eslint_flat_config):
                 try:
-                    content = eslint_flat_config.read_text(encoding="utf-8")
+                    content = await AsyncFileSystemService.read_text(eslint_flat_config)
                     if "module.exports = {" in content and "parser:" in content:
                         logger.info(
                             "Detected legacy config format inside eslint.config.js. Re-writing with valid flat configuration..."
@@ -107,7 +108,7 @@ class ApiStrategy(PlatformStrategy):
                             "  }\n"
                             "];\n"
                         )
-                        eslint_flat_config.write_text(valid_flat_config, encoding="utf-8")
+                        await AsyncFileSystemService.write_text_atomic(eslint_flat_config, valid_flat_config)
                 except Exception as e:
                     logger.warning("Failed to fix legacy eslint.config.js: %s", e)
 
@@ -125,13 +126,13 @@ class ApiStrategy(PlatformStrategy):
                 )
             else:
                 logger.info("NestJS/Node dependencies installed successfully.")
-        elif req_txt.exists():
-            # Python requirements.txt
-            logger.info("Detected Python (requirements.txt) project. Installing dependencies...")
-            returncode, _, stderr = await self._run_command(["pip", "install", "-r", "requirements.txt"], repo_path)
+        elif await AsyncFileSystemService.exists(req_txt):
+            # Python standard layout - install requirements
+            logger.info("Detected python pip requirements. Installing dependency bundle...")
+            returncode, stdout, stderr = await self._run_command(["pip", "install", "-r", "requirements.txt"], repo_path)
             if returncode != 0:
-                logger.warning("pip install requirements failed: %s", stderr.decode().strip())
-        elif pyproj.exists():
+                raise PlatformStrategyError(f"pip install requirements failed: {stderr.decode().strip()}")
+        elif await AsyncFileSystemService.exists(pyproj):
             # Python pyproject.toml
             logger.info("Detected Python (pyproject.toml) project. Installing editable package...")
             returncode, _, stderr = await self._run_command(["pip", "install", "-e", "."], repo_path)
@@ -156,7 +157,7 @@ class ApiStrategy(PlatformStrategy):
         package_json = repo_path / "package.json"
         errors: list[str] = []
 
-        if package_json.exists():
+        if await AsyncFileSystemService.exists(package_json):
             # Node / NestJS validation
             lint_ok = True
 

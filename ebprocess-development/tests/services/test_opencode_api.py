@@ -115,7 +115,8 @@ async def run_test():
             plan_file.write_text(plan_content, encoding="utf-8")
 
             # Write context file for the platform
-            OpenCodeService.write_context(ctx, storage, platform=platform)
+            import asyncio
+            asyncio.run(OpenCodeService.write_context(ctx, storage, platform=platform))
 
             return (
                 JobResult(

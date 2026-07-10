@@ -55,7 +55,7 @@ class OpenCodeService:
     """Orchestration service coordinating execution context, prompts and deepagent APIs."""
 
     @staticmethod
-    def write_context(job_context: JobContext, storage_dir: Path, platform: str = "") -> Path:
+    async def write_context(job_context: JobContext, storage_dir: Path, platform: str = "") -> Path:
         """
         Write the two-tier context files for *job_context*.
 
@@ -87,7 +87,7 @@ class OpenCodeService:
             manifest path.
         """
 
-        return EpicContextWriter().write_context(job_context, storage_dir, platform=platform)
+        return await EpicContextWriter().write_context(job_context, storage_dir, platform=platform)
 
     @staticmethod
     def _resolve_agent(job_context: JobContext) -> str:
@@ -132,7 +132,7 @@ class OpenCodeService:
         # Project-scoped storage: .opencode/<space_name>/
         storage_dir = job_context.project_storage_dir(config.OPENCODE_PROJECT_DIR)
 
-        cls.write_context(job_context, storage_dir, platform=platform)
+        await cls.write_context(job_context, storage_dir, platform=platform)
         prompt = prompts.build_prompt(job_context, storage_dir=storage_dir, session_id=session_id, platform=platform)
 
         server_url = config.OPENCODE_SERVER_URL or DEFAULT_OPENCODE_SERVER_URL
@@ -326,6 +326,6 @@ def invoke_opencode(*args, **kwargs):
     return OpenCodeService.invoke(*args, **kwargs)
 
 
-def write_context(*args, **kwargs):
+async def write_context(*args, **kwargs):
     """Wrapper matching original function signature for backward compatibility."""
-    return OpenCodeService.write_context(*args, **kwargs)
+    return await OpenCodeService.write_context(*args, **kwargs)

@@ -30,15 +30,14 @@ Architecture Notes
 
 from __future__ import annotations
 
-import asyncio
 import json
-import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from ebdev.core.exceptions import EpicStateError
 from ebdev.core.logger import get_logger
 from ebdev.models.task import EpicStateSnapshot, TaskArtifactState
+from ebdev.services.fs import AsyncFileSystemService
 
 if TYPE_CHECKING:
     pass
@@ -52,81 +51,6 @@ logger = get_logger(__name__)
 # Internal constants
 # ---------------------------------------------------------------------------
 _STATE_FILENAME: str = "state.json"
-
-
-# ---------------------------------------------------------------------------
-# Internal I/O helpers (run in thread pool via asyncio.to_thread)
-# ---------------------------------------------------------------------------
-
-
-def _read_snapshot_sync(state_path: Path) -> Optional[EpicStateSnapshot]:
-    """
-    Deserialize ``state.json`` from disk synchronously.
-
-    Parameters
-    ----------
-    state_path:
-        Absolute path to the ``state.json`` file.
-
-    Returns
-    -------
-    EpicStateSnapshot | None
-        Parsed snapshot, or ``None`` when the file does not exist.
-
-    Raises
-    ------
-    EpicStateError
-        When the file exists but cannot be parsed (corrupt or schema mismatch).
-    """
-    if not state_path.exists():
-        return None
-
-    try:
-        raw = state_path.read_text(encoding="utf-8")
-        data = json.loads(raw)
-        return EpicStateSnapshot.model_validate(data)
-    except (json.JSONDecodeError, ValueError) as exc:
-        raise EpicStateError(f"Failed to parse state.json at {state_path}: {exc}") from exc
-
-
-def _write_snapshot_sync(state_path: Path, snapshot: EpicStateSnapshot) -> None:
-    """
-    Serialize *snapshot* to disk atomically via write-then-rename.
-
-    The temporary file is written to the same directory as the target so the
-    ``os.rename`` call is guaranteed to be atomic on POSIX systems (same
-    filesystem).  On Windows the rename is best-effort.
-
-    Parameters
-    ----------
-    state_path:
-        Absolute path to the target ``state.json`` file.
-    snapshot:
-        The snapshot to persist.
-
-    Raises
-    ------
-    EpicStateError
-        When the directory cannot be created or the file cannot be written.
-    """
-    try:
-        state_path.parent.mkdir(parents=True, exist_ok=True)
-        payload = snapshot.model_dump_json(indent=2)
-
-        # Write to a sibling temp file, then rename for atomicity.
-        fd, tmp_path_str = tempfile.mkstemp(dir=state_path.parent, prefix=".state_", suffix=".json.tmp")
-        tmp_path = Path(tmp_path_str)
-        try:
-            with open(fd, "w", encoding="utf-8") as fh:
-                fh.write(payload)
-            tmp_path.rename(state_path)
-        except Exception:
-            tmp_path.unlink(missing_ok=True)
-            raise
-    except EpicStateError:
-        raise
-    except OSError as exc:
-        raise EpicStateError(f"Failed to write state.json at {state_path}: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -185,13 +109,19 @@ class EpicStateService:
         EpicStateError
             When the file exists but is corrupt or fails schema validation.
         """
-        snapshot = await asyncio.to_thread(_read_snapshot_sync, self._state_path)
-        if snapshot is not None:
-            logger.debug(
-                "Loaded epic state for %s (%d tasks).",
-                snapshot.epic_id,
-                len(snapshot.tasks),
-            )
+        try:
+            if not await AsyncFileSystemService.exists(self._state_path):
+                return None
+            data = await AsyncFileSystemService.read_json(self._state_path)
+            snapshot = EpicStateSnapshot.model_validate(data)
+        except Exception as exc:
+            raise EpicStateError(f"Failed to parse state.json at {self._state_path}: {exc}") from exc
+
+        logger.debug(
+            "Loaded epic state for %s (%d tasks).",
+            snapshot.epic_id,
+            len(snapshot.tasks),
+        )
         return snapshot
 
     async def load_or_init(
@@ -240,7 +170,12 @@ class EpicStateService:
         EpicStateError
             On any I/O failure.
         """
-        await asyncio.to_thread(_write_snapshot_sync, self._state_path, snapshot)
+        try:
+            payload = snapshot.model_dump_json(indent=2)
+            await AsyncFileSystemService.write_text_atomic(self._state_path, payload)
+        except Exception as exc:
+            raise EpicStateError(f"Failed to write state.json at {self._state_path}: {exc}") from exc
+
         logger.info(
             "Saved epic state for %s — %d task(s) registered.",
             snapshot.epic_id,

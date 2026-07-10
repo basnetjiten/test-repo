@@ -19,6 +19,7 @@ from ebdev.models.spoq import SPOQMapEpic
 from ebdev.models.ticket import EpicTask, SprintTicket
 from ebdev.services.db import check_db, close_db, init_db
 from ebdev.services.epic_state import get_epic_state_service
+from ebdev.services.fs import AsyncFileSystemService
 from ebdev.services.git import GitConflictError
 
 setup_logging()
@@ -356,12 +357,11 @@ async def execute_pipeline(request: ExecutePipelineRequest):
         if not request.resume and not request.rework_failed_tasks:
             epic_dir = Path(config.WORKSPACE_DIR) / request.space_name / ".ebpearls" / request.ticket_id
             state_json_path = epic_dir / "state.json"
-            if state_json_path.exists():
-                try:
-                    state_json_path.unlink()
+            try:
+                if await AsyncFileSystemService.delete_file(state_json_path):
                     logger.info("Successfully deleted stale state.json at %s", state_json_path)
-                except Exception as exc:
-                    logger.warning("Failed to delete stale state.json at %s: %s", state_json_path, exc)
+            except Exception as exc:
+                logger.warning("Failed to delete stale state.json at %s: %s", state_json_path, exc)
 
         # ------------------------------------------------------------------
         # Checkpoint-aware resume logic
