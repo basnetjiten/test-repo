@@ -472,9 +472,22 @@ Because `state.generated_artifacts` is a dictionary field on `GraphState`, it is
 
 | Component | File |
 |---|---|
-| Pydantic models | [`TaskArtifacts`, `TaskArtifactState`, `EpicStateSnapshot`](file:///Users/ebpearls/Desktop/macmini-migrated/CascadeProjects/ebprocess-development/src/ebdev/models/schemas.py) |
+| Pydantic models | [`TaskArtifacts`, `TaskArtifactState`, `EpicStateSnapshot`](file:///Users/ebpearls/Desktop/macmini-migrated/CascadeProjects/ebprocess-development/src/ebdev/models/task.py) |
 | Service | [`EpicStateService`](file:///Users/ebpearls/Desktop/macmini-migrated/CascadeProjects/ebprocess-development/src/ebdev/services/epic_state.py) |
 | Domain exception | [`EpicStateError`](file:///Users/ebpearls/Desktop/macmini-migrated/CascadeProjects/ebprocess-development/src/ebdev/core/exceptions.py) |
+| Centralized Filesystem | [`AsyncFileSystemService`](file:///Users/ebpearls/Desktop/macmini-migrated/CascadeProjects/ebprocess-development/src/ebdev/services/fs.py) |
+
+#### Content-Hash Sidecar Guard (`.manifest.sha256`)
+
+When writing the shared epic manifest `context.json` (Tier 1), the service computes a SHA-256 hash of the payload and writes it to a sidecar file `.manifest.sha256`. Before rewriting `context.json`, the writer reads the sidecar hash. If the hash matches the new payload's hash, the write is bypassed. This prevents redundant disk I/O when multiple concurrent platform builders attempt to hydrate the shared context.
+
+#### 2.10 Centralized Async Filesystem Service (`AsyncFileSystemService`)
+
+To keep the pipeline non-blocking and prevent write collisions, the host exposes a centralized filesystem facade [`AsyncFileSystemService`](file:///Users/ebpearls/Desktop/macmini-migrated/CascadeProjects/ebprocess-development/src/ebdev/services/fs.py).
+
+* **Non-blocking Event Loop**: All filesystem operations—reads, writes, existence checks, folder creation, and deletion—are wrapped in `asyncio.to_thread`. This offloads blocking I/O calls to the thread pool, keeping the LangGraph execution loops responsive.
+* **Atomic Write-and-Replace**: When saving state snapshots (`state.json`) or context files, the service writes content to a temporary sibling file (e.g., `.fs_xxxx.tmp`) first, and then executes an atomic `os.replace`. This guarantees that concurrent agents or monitoring queries never observe partially written files.
+* **No Side-effect Resolution**: Path builders like `JobContext.project_storage_dir` are strictly side-effect-free. They compute logical path locations without invoking synchronous disk I/O (`mkdir`). Directory structures are created asynchronously only when active file writes are dispatched.
 
 ---
 
@@ -1024,10 +1037,12 @@ sequenceDiagram
 ├── .gitignore                        ← Excludes workspace/, .opencode/, .env
 ├── .env                              ← Local environment configuration file
 │
-├── test/
+├── tests/
 │   ├── task_planning.json            ← Sample API execution payload
 │   ├── test_pipeline.py              ← Concurrent pipeline simulation dry run
-│   └── test_opencode_api.py          ← OpenCode bridge path isolation verification
+│   ├── test_opencode_api.py          ← OpenCode bridge path isolation verification
+│   └── services/
+│       └── test_fs_service.py        ← Centralized filesystem service unit tests
 │
 ├── workspace/                        ← (gitignored) Runtime project checkouts
 │   └── <space_name>/
@@ -1062,7 +1077,7 @@ sequenceDiagram
         │   ├── spoq_utils.py         ← Task loading & epic lifecycle helper
         │   ├── nodes/
         │   │   ├── prepare.py        ← Workspace clone & dependency setup
-        │   │   ├── orchestrate.py    ← Strategy selection & SPOQ DAG generation
+        │   │   ├── strategize.py     ← Strategy selection & SPOQ DAG generation
         │   │   ├── plan.py           ← Concurrent planner invocation
         │   │   ├── generate.py       ← Concurrent builder invocation
         │   │   ├── validate.py       ← Quality gate validator dispatcher
@@ -1078,10 +1093,15 @@ sequenceDiagram
         │   ├── flutter.py            ← FlutterStrategy
         │   └── api.py                ← ApiStrategy
         └── services/
-            ├── checkpoint.py           ← Checkpoint lifecycle management (cleanup, history)
+            ├── checkpoint.py         ← Checkpoint lifecycle management (cleanup, history)
             ├── db.py                 ← Job tracking & JSON fallback
+            ├── fs.py                 ← Centralized async filesystem service (non-blocking, atomic writes)
             ├── git.py                ← Git repository, branch, and PR provider
-            ├── opencode.py           ← SSE-streaming OpenCode client
+            ├── opencode/
+            │   ├── __init__.py
+            │   ├── client.py         ← OpenCode API client
+            │   ├── context_writer.py ← Context manifest & slice writer with content-hash sidecar
+            │   └── orchestrator.py   ← OpenCode service orchestration
             ├── prompts.py            ← Prompt builders with path translation
             └── starter.py            ← Project skeleton bootstrapping
 ```
