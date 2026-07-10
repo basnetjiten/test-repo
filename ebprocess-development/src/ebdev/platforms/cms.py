@@ -21,6 +21,7 @@ from pathlib import Path
 from ebdev.core.exceptions import PlatformStrategyError
 from ebdev.core.logger import get_logger
 from ebdev.platforms.base import PlatformStrategy
+from ebdev.services.fs import AsyncFileSystemService
 
 # ---------------------------------------------------------------------------
 # Module-level logger
@@ -57,7 +58,7 @@ class CmsStrategy(PlatformStrategy):
         logger.info("Preparing CMS repository at %s", repo_path)
         package_json = repo_path / "package.json"
 
-        if package_json.exists():
+        if await AsyncFileSystemService.exists(package_json):
             logger.info("Detected Vite/React project. Installing node modules...")
             returncode, stdout, stderr = await self._run_command(
                 ["npm", "install", "--legacy-peer-deps", "--engine-strict=false"], repo_path
@@ -80,7 +81,7 @@ class CmsStrategy(PlatformStrategy):
         package_json = repo_path / "package.json"
         errors: list[str] = []
 
-        if package_json.exists():
+        if await AsyncFileSystemService.exists(package_json):
             logger.info("Identifying modified and untracked TypeScript/TSX files in CMS workspace...")
             rc, stdout, _stderr = await self._run_command(["git", "status", "--porcelain"], repo_path)
             changed_files: list[str] = []
@@ -115,8 +116,7 @@ class CmsStrategy(PlatformStrategy):
                 logger.info("No changed TS/TSX files detected. Skipping linting.")
 
             try:
-                with open(package_json, "r", encoding="utf-8") as f:
-                    pkg_data = json.load(f)
+                pkg_data = await AsyncFileSystemService.read_json(package_json)
                 scripts = pkg_data.get("scripts", {})
                 if "test" in scripts:
                     logger.info("Running CMS tests...")

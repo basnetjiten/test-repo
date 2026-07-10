@@ -249,6 +249,25 @@ def build_epic_tasks(epic: SPOQMapEpic, mocking_level: str = "live") -> list[SPO
             )
             impl_tasks.append(web_id)
 
+        if "cms" in active_platforms:
+            cms_id = f"cms-impl-{tid}"
+            cms_deps = [contract_id]
+            if api_id and mocking_level == "live":
+                cms_deps.append(api_id)
+            tasks.append(
+                SPOQTask(
+                    id=cms_id,
+                    title=f"CMS Impl for {task.name}",
+                    epic=epic.id,
+                    status="blocked",
+                    phase=1,
+                    dependencies=cms_deps,
+                    skills_required=["cms"],
+                    outputs=["Working UI"],
+                )
+            )
+            impl_tasks.append(cms_id)
+
         if impl_tasks:
             integration_id = f"integration-{tid}"
             tasks.append(
