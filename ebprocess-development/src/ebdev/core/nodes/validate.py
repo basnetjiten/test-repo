@@ -84,10 +84,10 @@ async def _write_validation_state(
     epic_dir = ctx.project_storage_dir() / ctx.spoq_epic_dir
     svc = get_epic_state_service(epic_dir)
 
-    # Pre-map tasks to their skills for fast platform lookup
-    task_skills = {}
+    # Pre-map tasks to their platforms for fast lookup
+    task_platforms = {}
     if spoq_tasks:
-        task_skills = {t.id: t.skills_required for t in spoq_tasks}
+        task_platforms = {t.id: t.platforms for t in spoq_tasks}
 
     try:
         failure_count = sum(len(v) for v in platform_errors.values()) if not passed else 0
@@ -109,9 +109,9 @@ async def _write_validation_state(
             if existing:
                 platform = existing.platform
             else:
-                skills = task_skills.get(task_id)
-                if skills:
-                    platform = skills[0]
+                platforms = task_platforms.get(task_id)
+                if platforms:
+                    platform = platforms[0]
                 elif "api" in task_id:
                     platform = "api"
                 elif "flutter" in task_id:
@@ -202,7 +202,7 @@ async def validate_node(state: GraphState) -> GraphState:
         active_tasks = get_state_active_tasks(state.spoq_tasks)
         tasks_to_validate: list[tuple[str, str]] = []
         for t in active_tasks:
-            for p in t.skills_required:
+            for p in t.platforms:
                 tasks_to_validate.append((t.id, p))
         seen: set[tuple[str, str]] = set()
         unique_tasks = []
@@ -234,12 +234,80 @@ async def validate_node(state: GraphState) -> GraphState:
         plat_path = ctx.platform_path(platform)
 
         if not is_spoq:
+            # Step 1: Run platform-level lint/test checks.
             strategy = get_platform_strategy(platform)
+            lint_errors: list[str] = []
             try:
-                errors = await strategy.validate(plat_path)
-                return platform, errors
+                lint_errors = await strategy.validate(plat_path)
             except (EbDevError, OSError, asyncio.TimeoutError) as e:
-                return platform, [f"System check exception during validation on platform {platform}: {e!s}"]
+                lint_errors = [f"System check exception during validation on platform {platform}: {e!s}"]
+
+            # Step 2: Also run the code_evaluator agent via OpenCode so that
+            # structured evaluation journals are always produced, even in
+            # non-SPOQ mode.
+            eval_ctx = ctx.model_copy(
+                update={
+                    "repo_path": str(plat_path),
+                    "platform": platform,
+                    "active_task_id": task_id or ctx.ticket_id,
+                    "current_agent": "code_evaluator",
+                }
+            )
+
+            # Pre-create the journals directory so the evaluator can write its journal.
+            journals_dir: Path | None = None
+            task_id_str = str(ctx.task_id) if getattr(ctx, "task_id", None) else "default"
+            if "-" in task_id_str:
+                parts = task_id_str.rsplit("-", 1)
+                if len(parts) == 2 and parts[1].isdigit():
+                    task_id_dir = parts[1]
+                else:
+                    task_id_dir = task_id_str
+            else:
+                task_id_dir = task_id_str
+            journals_dir = ctx.project_storage_dir() / task_id_dir / "journals"
+            await AsyncFileSystemService.ensure_directory(journals_dir)
+            logger.info("%s Ensured journals directory: %s", task_label, journals_dir)
+
+            loop = asyncio.get_running_loop()
+
+            def _on_opencode_progress_non_spoq(msg: str) -> None:
+                asyncio.run_coroutine_threadsafe(send_progress(state, f"{task_label} Evaluator: {msg}"), loop)
+
+            session_id_key = f"{ctx.ticket_id}_{platform}"
+            session_ids_ns = getattr(state, "opencode_session_ids", {}) or {}
+            existing_session_id_ns = session_ids_ns.get(platform) or await db.get_session_id(session_id_key)
+
+            eval_errors: list[str] = []
+            try:
+                eval_result, _ = await asyncio.to_thread(
+                    invoke_opencode,
+                    eval_ctx,
+                    progress_callback=_on_opencode_progress_non_spoq,
+                    session_id=existing_session_id_ns,
+                )
+                if eval_result.status == "failed" or eval_result.errors:
+                    errs = eval_result.errors or []
+                    remediation = getattr(eval_result, "remediation", "") or (
+                        eval_result.summary if eval_result.status == "failed" else ""
+                    )
+                    if remediation:
+                        errs.append(remediation)
+                    eval_errors = errs
+                else:
+                    logger.info("%s code_evaluator passed: %s", task_label, eval_result.summary)
+            except Exception as e:
+                logger.warning("%s code_evaluator invocation failed (non-fatal): %s", task_label, e)
+                eval_errors = [f"code_evaluator exception: {e}"]
+
+            return platform, lint_errors + eval_errors
+
+        # SPOQ mode: pre-create the journals directory so the evaluator can always write its output.
+        if ctx.spoq_epic_dir:
+            epic_dir = ctx.project_storage_dir() / ctx.spoq_epic_dir
+            journals_dir_spoq = epic_dir / "journals"
+            await AsyncFileSystemService.ensure_directory(journals_dir_spoq)
+            logger.info("%s Ensured SPOQ journals directory: %s", task_label, journals_dir_spoq)
 
         eval_ctx = ctx.model_copy(
             update={
@@ -281,6 +349,7 @@ async def validate_node(state: GraphState) -> GraphState:
             return platform, []
         except Exception as e:
             return platform, [f"Evaluator execution exception: {e}"]
+
 
     try:
         runs = await asyncio.gather(*[validate_single_task_platform(t, p) for t, p in tasks_to_validate])
@@ -381,7 +450,7 @@ async def validate_node(state: GraphState) -> GraphState:
                 failed_ids = {
                     t.id
                     for t in active_tasks
-                    if state.failed_platforms.get(next(iter(t.skills_required), ctx.platform), False)
+                    if state.failed_platforms.get(next(iter(t.platforms), ctx.platform), False)
                 }
                 if failed_ids:
                     await _write_validation_state(

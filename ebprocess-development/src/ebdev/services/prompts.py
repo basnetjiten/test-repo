@@ -144,8 +144,21 @@ def agent_instructions(job_context: JobContext, storage_dir: Path, platform: str
 - JOURNAL: You MUST write your detailed evaluation journal to the `journals/` folder in the epic directory.
  - OUTPUT: Output ONLY a single JSON object containing the status, metrics, average, minimum, and a brief ≤20 line remediation instructions if failed. Do not wrap it in markdown fences.
 </{Prompts.INSTRUCTIONS_TAG}>"""
+        # Non-SPOQ: build a journal output path under the task-scoped directory.
+        task_id_str_eval = str(job_context.task_id) if getattr(job_context, "task_id", None) else "default"
+        if "-" in task_id_str_eval:
+            eval_parts = task_id_str_eval.rsplit("-", 1)
+            task_dir_eval = eval_parts[1] if len(eval_parts) == 2 and eval_parts[1].isdigit() else task_id_str_eval
+        else:
+            task_dir_eval = task_id_str_eval
+        journals_path_eval = storage_dir_container / task_dir_eval / "journals"
         return f"""<{Prompts.INSTRUCTIONS_TAG}>
-- GOAL: Run standard validation checks on platform {plat}.
+- GOAL: Score the completed code for ticket {job_context.ticket_id} on platform {plat} against the 10 quality metrics: Syntactic Correctness (SC), Test Existence (TE), Test Pass Rate (TP), Requirements Fidelity (RF), SOLID Adherence (SA), Security (SE), Error Handling (EH), Scalability (SL), Code Clarity (CC), and Completeness (CO).
+- SCORING: Use the `agent-validation` skill to grade each metric (0-100). Calculate the average and identify the minimum score.
+- DECISION: Pass the task ONLY if avg(M₁…M₁₀) ≥ 95 AND min(M₁…M₁₀) ≥ 80.
+- JOURNAL: You MUST write your detailed evaluation journal as a Markdown file to the `journals/` folder at: {journals_path_eval}
+  The journal filename should be: {job_context.ticket_id}_{plat}.evaluation.md
+- OUTPUT: Output ONLY a single JSON object containing the status, metrics, average, minimum, and a brief ≤20 line remediation instructions if failed. Do not wrap it in markdown fences.
 </{Prompts.INSTRUCTIONS_TAG}>"""
 
     # Planner instructions

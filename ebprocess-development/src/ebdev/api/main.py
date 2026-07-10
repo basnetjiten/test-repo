@@ -196,6 +196,11 @@ class ExecutePipelineRequest(BaseModel):
                             "id": t_id,
                             "name": t_name,
                             "status": t_status_norm,
+                            "platform": {
+                                "id": plat_id,
+                                "name": plat_name
+                            } if plat_name else None,
+                            "platformId": plat_id,
                             "hours": [task_hour]
                         })
 

@@ -255,10 +255,10 @@ async def orchestrate_node(state: GraphState) -> GraphState:
             snapshot = await svc.load_or_init(epic_id=active_epic_id, space_name=updated_ctx.space_name)
             for task in active_epic_tasks:
                 if not snapshot.get_task(task.id):
-                    if task.skills_required:
-                        platform = task.skills_required[0]
+                    if task.platforms:
+                        platform = task.platforms[0]
                     else:
-                        raise OrchestrationError(f"Task {task.id} has no skills/platforms associated with it.")
+                        raise OrchestrationError(f"Task {task.id} has no platforms associated with it.")
 
                     snapshot = snapshot.upsert_task(
                         TaskArtifactState(

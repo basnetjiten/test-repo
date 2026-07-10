@@ -42,6 +42,21 @@ async def preflight_node(state: GraphState) -> GraphState:
 
     await send_progress(state, "Preflight: Verifying workspace state and checkpoints...")
 
+    # Fast-path: if all in-memory SPOQ tasks are already "completed", this is a
+    # stale-checkpoint resume — route straight to publish without re-running builders.
+    if state.spoq_tasks and all(t.status == "completed" for t in state.spoq_tasks):
+        logger.warning(
+            "Preflight: All %d SPOQ tasks already 'completed' in checkpoint state. "
+            "This is a stale checkpoint resume — routing directly to publish_agent.",
+            len(state.spoq_tasks),
+        )
+        return state.model_copy(
+            update={
+                "preflight_skip_to": "publish_agent",
+                "done": True,
+            }
+        )
+
     epic_dir = ctx.project_storage_dir() / ctx.spoq_epic_dir
     svc = get_epic_state_service(epic_dir)
 

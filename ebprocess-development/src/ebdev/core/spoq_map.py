@@ -174,7 +174,7 @@ def build_epic_tasks(epic: SPOQMapEpic, mocking_level: str = "live") -> list[SPO
                 status="pending",
                 phase=0,
                 dependencies=[],
-                skills_required=(["api"] if "api" in active_platforms else [active_platforms[0]] if active_platforms else []),
+                platforms=(["api"] if "api" in active_platforms else [active_platforms[0]] if active_platforms else []),
                 outputs=["OpenAPI YAML", "Database schema models"],
             )
         )
@@ -191,7 +191,7 @@ def build_epic_tasks(epic: SPOQMapEpic, mocking_level: str = "live") -> list[SPO
                     status="blocked",
                     phase=1,
                     dependencies=[contract_id],
-                    skills_required=["api"],
+                    platforms=["api"],
                     outputs=["Working routes"],
                 )
             )
@@ -210,7 +210,7 @@ def build_epic_tasks(epic: SPOQMapEpic, mocking_level: str = "live") -> list[SPO
                     status="blocked",
                     phase=1,
                     dependencies=flutter_deps,
-                    skills_required=["flutter"],
+                    platforms=["flutter"],
                     outputs=["Working UI"],
                 )
             )
@@ -229,7 +229,7 @@ def build_epic_tasks(epic: SPOQMapEpic, mocking_level: str = "live") -> list[SPO
                     status="blocked",
                     phase=1,
                     dependencies=web_deps,
-                    skills_required=["web"],
+                    platforms=["web"],
                     outputs=["Working UI"],
                 )
             )
@@ -248,7 +248,7 @@ def build_epic_tasks(epic: SPOQMapEpic, mocking_level: str = "live") -> list[SPO
                     status="blocked",
                     phase=1,
                     dependencies=cms_deps,
-                    skills_required=["cms"],
+                    platforms=["cms"],
                     outputs=["Working UI"],
                 )
             )
@@ -264,7 +264,7 @@ def build_epic_tasks(epic: SPOQMapEpic, mocking_level: str = "live") -> list[SPO
                     status="blocked",
                     phase=2,
                     dependencies=impl_tasks,
-                    skills_required=active_platforms,
+                    platforms=active_platforms,
                     outputs=["Verified integration"],
                 )
             )

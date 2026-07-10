@@ -107,7 +107,7 @@ class Settings(BaseSettings):
     # Default project repo (overridable per request)
     # ------------------------------------------------------------------
     DEFAULT_PROJECT_REPO: str = Field(
-        default="https://bitbucket.org/basnetjiten7/test-repo.git",
+        default="https://bitbucket.org/basnetjiten/test-repo.git",
         validation_alias="DEFAULT_PROJECT_REPO",
     )
 

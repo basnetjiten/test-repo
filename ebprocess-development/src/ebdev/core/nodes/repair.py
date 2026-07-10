@@ -75,7 +75,7 @@ async def _write_repair_state(
         return
 
     new_status: TaskStatus = "needs_review" if blocked else "repairing"
-    task_skills = {t.id: t.skills_required for t in spoq_tasks}
+    task_platforms = {t.id: t.platforms for t in spoq_tasks}
 
     try:
         snapshot = await svc.load_or_init(
@@ -89,9 +89,9 @@ async def _write_repair_state(
             if existing:
                 platform = existing.platform
             else:
-                skills = task_skills.get(task_id)
-                if skills:
-                    platform = skills[0]
+                platforms = task_platforms.get(task_id)
+                if platforms:
+                    platform = platforms[0]
                 elif "api" in task_id:
                     platform = "api"
                 elif "flutter" in task_id:
@@ -166,7 +166,7 @@ async def repair_node(state: GraphState) -> GraphState:
         all_platforms: list[str] = []
         for t in state.spoq_tasks:
             if t.id in active_task_ids:
-                all_platforms.extend(t.skills_required)
+                all_platforms.extend(t.platforms)
         active_platforms = list(dict.fromkeys(all_platforms))
     else:
         active_platforms = (

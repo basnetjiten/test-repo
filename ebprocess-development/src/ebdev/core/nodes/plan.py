@@ -135,7 +135,7 @@ async def plan_node(state: GraphState) -> GraphState:
         tasks = get_state_active_tasks(state.spoq_tasks)
         tasks_to_plan: list[tuple[str, str]] = []
         for t in tasks:
-            for p in t.skills_required:
+            for p in t.platforms:
                 tasks_to_plan.append((t.id, p))
         # Deduplicate
         seen: set[tuple[str, str]] = set()

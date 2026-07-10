@@ -334,7 +334,16 @@ class GitService:
         """
         if not self.has_changes():
             return
-        self._run(["add", "."])
+        # Use -A to capture renames and deletions as well as new files.
+        self._run(["add", "-A"])
+        # Verify something was actually staged before committing to avoid
+        # CalledProcessError when the working-tree had untracked/gitignored
+        # files that git add could not stage.
+        diff_res = self._run(["diff", "--cached", "--quiet"], check=False)
+        if diff_res.returncode == 0:
+            # Exit code 0 means index is clean — nothing staged.
+            logger.info("commit_all: Nothing staged after 'git add -A'. Skipping commit.")
+            return
         self._run(["commit", "-m", message])
 
     def push(self, branch_name: str, repo_url: str) -> None:

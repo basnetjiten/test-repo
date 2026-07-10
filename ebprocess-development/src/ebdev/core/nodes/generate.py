@@ -70,7 +70,7 @@ async def generate_node(state: GraphState) -> GraphState:
         tasks = get_state_active_tasks(state.spoq_tasks)
         tasks_to_generate: list[tuple[str, str]] = []
         for t in tasks:
-            for p in t.skills_required:
+            for p in t.platforms:
                 tasks_to_generate.append((t.id, p))
         # Deduplicate
         seen: set[tuple[str, str]] = set()
@@ -86,8 +86,36 @@ async def generate_node(state: GraphState) -> GraphState:
     list({p for _, p in tasks_to_generate})
     Path(ctx.repo_path)
 
-    if state.result and state.result.status == "failed":
-        logger.info("Skipping due to plan failure.")
+    # NOTE: Do NOT short-circuit the entire generate phase based on the
+    # consolidated state.result — that would abort ALL platforms even when
+    # only a subset (e.g. web/cms) had plan failures.  Per-platform plan
+    # file existence is checked inside generate_single_task_platform().
+
+    # Guard: if there are no tasks to generate (e.g. all SPOQ tasks are already
+    # "completed" on a stale checkpoint resume), skip cleanly.
+    if not tasks_to_generate:
+        if is_spoq:
+            all_completed = all(t.status == "completed" for t in state.spoq_tasks)
+            if all_completed:
+                logger.warning(
+                    "generate_node: All SPOQ tasks are already 'completed' in state — "
+                    "this is a stale checkpoint resume. Routing to publish."
+                )
+                return state.model_copy(
+                    update={
+                        "last_node": "builder_agent",
+                        "done": True,
+                        "result": state.result
+                        or JobResult(
+                            task_id=ctx.ticket_id,
+                            space_name=ctx.space_name,
+                            ticket_id=ctx.ticket_id,
+                            status="success",
+                            summary="All tasks already completed. Skipping build phase.",
+                        ),
+                    }
+                )
+        logger.warning("generate_node: No tasks to generate — tasks_to_generate is empty.")
         return state.model_copy(update={"last_node": "builder_agent"})
 
     results: dict[str, JobResult] = {}

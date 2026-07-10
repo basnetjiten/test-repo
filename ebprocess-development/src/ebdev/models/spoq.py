@@ -24,7 +24,7 @@ class SPOQTask(BaseModel):
     status: str = "pending"  # pending | in_progress | completed | blocked
     phase: int = 0
     dependencies: List[str] = Field(default_factory=list)
-    skills_required: List[str] = Field(default_factory=list)
+    platforms: List[str] = Field(default_factory=list)
     files_to_touch: List[str] = Field(default_factory=list)
     outputs: List[str] = Field(default_factory=list)
     acceptance_criteria: List[str] = Field(default_factory=list)

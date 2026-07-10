@@ -83,7 +83,17 @@ async def run_test():
         if "plan" in agent:
             # SPOQ mode: tasks enriched in GraphState only (no YAML files)
             if ctx.spoq_epic_dir and ctx.active_task_id:
-                pass  # Enrichment handled by plan_node state updates
+                plan_dir = ctx.project_storage_dir() / ctx.spoq_epic_dir
+                plan_dir.mkdir(parents=True, exist_ok=True)
+                plan_file = plan_dir / f"{ctx.active_task_id}.md"
+                plan_content = (
+                    f"# Implementation Plan - {platform.upper()}\n\n"
+                    "## Scope\n"
+                    f"Implement session and auth tokens on {platform.upper()}.\n\n"
+                    "## Changes\n"
+                    f"- src/{platform}_auth: Define handlers and methods\n"
+                )
+                plan_file.write_text(plan_content, encoding="utf-8")
             else:
                 storage = ctx.project_storage_dir(config.OPENCODE_PROJECT_DIR)
                 plan_dir = storage / (str(ctx.task_id) if getattr(ctx, "task_id", None) else "default")
@@ -205,8 +215,6 @@ async def run_test():
         patch("ebdev.core.nodes.generate.db.save_session_id", return_value=True),
         patch("ebdev.core.nodes.generate.db.get_session_id", return_value=None),
         patch("ebdev.core.nodes.generate.db.get_session_id_by_jira_id", return_value=None),
-        patch("ebdev.core.nodes.plan.db.save_session_id", return_value=True),
-        patch("ebdev.core.nodes.plan.db.get_session_id", return_value=None),
     ]
 
     for p in patches:
