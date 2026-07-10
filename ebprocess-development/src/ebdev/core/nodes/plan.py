@@ -25,13 +25,13 @@ from ebdev.core.logger import get_logger
 from ebdev.core.nodes.common import send_progress
 from ebdev.core.spoq_utils import get_state_active_tasks
 from ebdev.models.graph_state import JobResult
-from ebdev.models.task import TaskArtifacts, TaskArtifactState
+from ebdev.models.spoq import SPOQTask
+from ebdev.models.task import TaskArtifacts, TaskArtifactState, TaskStatus
 from ebdev.services.epic_state import get_epic_state_service
 from ebdev.services.opencode import invoke_opencode
 
 if TYPE_CHECKING:
     from ebdev.models.graph_state import GraphState, JobContext
-    from ebdev.models.task import TaskStatus
 
 # ---------------------------------------------------------------------------
 # Module-level logger
@@ -76,8 +76,6 @@ async def _write_plan_state(
     """
     if not ctx.spoq_epic_dir:
         return
-
-    from ebdev.models.task import TaskStatus  # noqa: F401 — Literal type used at runtime
 
     epic_dir = ctx.project_storage_dir() / ctx.spoq_epic_dir
     svc = get_epic_state_service(epic_dir)
@@ -129,6 +127,7 @@ async def plan_node(state: GraphState) -> GraphState:
     start_time = time.time()
 
     ctx = state.context
+    assert ctx is not None, "plan_node requires a JobContext"
 
     is_spoq = state.is_spoq
     if is_spoq:
@@ -177,7 +176,7 @@ async def plan_node(state: GraphState) -> GraphState:
         # Check if plan already successfully generated/recorded in GraphState
         existing_art = state.generated_artifacts.get(task_id, {})
         if (
-            existing_art.get("status") in ("built", "evaluating", "passed")
+            existing_art.get("status") in ("pending_build", "building", "evaluating", "repairing", "passed", "needs_review")
             and plan_file.exists()
             and plan_file.stat().st_size > 50
         ):
@@ -199,7 +198,7 @@ async def plan_node(state: GraphState) -> GraphState:
             # Ensure the artifact registry reflects the idempotency skip so
             # downstream agents see this task as already planned.
             if ctx.spoq_epic_dir:
-                await _write_plan_state(ctx, task_id, platform, plan_file, status="built")
+                await _write_plan_state(ctx, task_id, platform, plan_file, status="pending_build")
             return (
                 task_id,
                 platform,
@@ -224,7 +223,7 @@ async def plan_node(state: GraphState) -> GraphState:
 
         loop = asyncio.get_running_loop()
 
-        def _on_opencode_progress(msg: str):
+        def _on_opencode_progress(msg: str) -> None:
             asyncio.run_coroutine_threadsafe(send_progress(state, f"{task_label} Planner: {msg}"), loop)
 
         result, _ = await asyncio.to_thread(invoke_opencode, plat_ctx, progress_callback=_on_opencode_progress)
@@ -253,9 +252,9 @@ async def plan_node(state: GraphState) -> GraphState:
                 )
                 # Register the generated contract artifact in state.json.
                 if ctx.spoq_epic_dir and result.status == "success":
-                    await _write_plan_state(ctx, task_id, platform, plan_file, status="built")
+                    await _write_plan_state(ctx, task_id, platform, plan_file, status="pending_build")
                 elif ctx.spoq_epic_dir and result.status == "failed":
-                    await _write_plan_state(ctx, task_id, platform, plan_file, status="evaluate_failed")
+                    await _write_plan_state(ctx, task_id, platform, plan_file, status="needs_review")
 
         return task_id, platform, result, plan_file
 
@@ -279,7 +278,7 @@ async def plan_node(state: GraphState) -> GraphState:
                         contract_rel = str(plan_file)
 
                 existing = updated_artifacts.get(task_id, {})
-                status = "built" if res.status == "success" else "evaluate_failed"
+                status = "pending_build" if res.status == "success" else "needs_review"
                 updated_artifacts[task_id] = {
                     **existing,
                     "status": status,
@@ -306,7 +305,7 @@ async def plan_node(state: GraphState) -> GraphState:
         updated_spoq_tasks = list(state.spoq_tasks)
         if is_spoq:
             active_task_ids = {t for t, _ in tasks_to_plan}
-            new_list: list = []
+            new_list: list[SPOQTask] = []
             for t in updated_spoq_tasks:
                 if t.id in active_task_ids and t.status == "pending":
                     new_list.append(t.model_copy(update={"status": "in_progress"}))

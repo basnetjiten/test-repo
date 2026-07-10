@@ -7,6 +7,7 @@
 """
 
 import asyncio
+import json
 import os
 import shutil
 import sys
@@ -15,10 +16,18 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+# Set test environment overrides before config import to prevent writing to real .opencode
+os.environ["OPENCODE_PROJECT_DIR"] = "/tmp/ebtest/opencode"
+os.environ["WORKSPACE_DIR"] = "/tmp/ebtest/workspace"
+
+from langchain_core.runnables import RunnableConfig
+
+from ebdev.api.main import ExecutePipelineRequest
 from ebdev.config import config
 from ebdev.core.graph import graph
 from ebdev.models.graph_state import GraphState, JobContext, JobResult
 from ebdev.models.ticket import SprintTicket
+from ebdev.services.opencode import OpenCodeService
 
 
 def _discover_space_name() -> str:
@@ -43,51 +52,43 @@ async def run_test():
         if plat_opencode.exists():
             shutil.rmtree(plat_opencode)
 
+    planning_path = Path(__file__).resolve().parent.parent / "task_planning.json"
+    with open(planning_path, "r", encoding="utf-8") as f:
+        raw_planning = json.load(f)
+
+    # Filter tasks to keep only api and flutter to avoid unpatched web/cms strategies
+    if "data" in raw_planning and "getProjectPlanning" in raw_planning["data"]:
+        planning = raw_planning["data"]["getProjectPlanning"]
+        for epic in planning.get("epics", []):
+            epic["tasks"] = [
+                t for t in epic.get("tasks", [])
+                if t.get("platform", {}).get("name", "").lower() in ["api", "flutter"]
+            ]
+
+    # Validate using ExecutePipelineRequest to convert raw planning format
+    req = ExecutePipelineRequest.model_validate(raw_planning)
+
     ticket = SprintTicket(
-        id="EPIC-102",
-        title="Create Enquiry Page",
-        description=(
-            "Create an enquiry page with a form containing title and description fields, and a submit button."
-        ),
-        status="To Do",
-        acceptance_criteria=[
-            "Flutter frontend includes form with title and description fields",
-            "API backend exposes a POST /enquiry endpoint to accept and save enquiries",
-        ],
-        tasks=[
-            {
-                "id": 60101,
-                "name": "Build enquiry form",
-                "status": "todo",
-                "hours": [
-                    {
-                        "estimatedHour": 1.0,
-                        "taskId": 60101,
-                        "platformId": 1,
-                        "platform": {"id": 1, "name": "flutter"},
-                    },
-                    {
-                        "estimatedHour": 1.0,
-                        "taskId": 60101,
-                        "platformId": 3,
-                        "platform": {"id": 3, "name": "api"},
-                    },
-                ],
-            }
-        ],
+        id=req.ticket_id,
+        title=req.title,
+        description=req.description,
+        status="todo",
+        tasks=req.tasks,
         figma_url=None,
     )
 
     context = JobContext(
-        job_id="job_epic_102",
+        task_id=f"job_{req.ticket_id.lower()}",
         space_name=_discover_space_name(),
-        ticket_id="EPIC-102",
+        ticket_id=req.ticket_id,
         ticket=ticket,
         repo_path=str(workspace_dir),
-        project_repo="https://bitbucket.org/basnetjiten7/test-repo.git",
-        platforms=["flutter", "api"],
+        project_repo=req.project_repo,
+        platforms=req.platforms,
         current_agent="plan",
         starter_type="cli",
+        map_id=req.map_id,
+        map_epics=req.epics,
     )
 
     initial_state = GraphState(context=context, done=False, failed=False)
@@ -114,8 +115,6 @@ async def run_test():
             plan_file.write_text(plan_content, encoding="utf-8")
 
             # Write context file for the platform
-            from ebdev.services.opencode import OpenCodeService
-
             OpenCodeService.write_context(ctx, storage, platform=platform)
 
             return (
@@ -170,12 +169,34 @@ async def run_test():
         return "mock-session-orchestrator"
 
     async def mock_send_prompt_message(self, session_id, agent, prompt, model=None):
-        import json
 
         strategy_data = {
             "complexity": "low",
             "execution_mode": "spoq",
             "mocking_rules": "mock all things",
+            "primary_feature_name": "tips",
+            "endpoints": [
+                {
+                    "entity": "tips",
+                    "task_id": "contract-276042",
+                    "suggested_routes": ["GET /tips/daily"],
+                    "graphql_mutation": "getDailyTip",
+                }
+            ],
+            "task_contexts": {
+                "contract-276042": {
+                    "task_name": "Show daily wellness tips to users",
+                    "feature_name": "tips",
+                    "platforms": ["api"],
+                    "needs_schema": True,
+                    "needs_ui": False,
+                    "expected_files": {
+                        "api": ["libs/data-access/src/tips/tips.schema.ts"],
+                    },
+                    "data_access_registrations": [],
+                    "app_module_registrations": [],
+                }
+            },
         }
         return {"parts": [{"type": "text", "text": f"```json\n{json.dumps(strategy_data)}\n```"}]}
 
@@ -222,7 +243,7 @@ async def run_test():
 
     try:
         print("Invoking LangGraph concurrent pipeline...")
-        thread_config = {"configurable": {"thread_id": "test-thread-epic-102"}}
+        thread_config: RunnableConfig = {"configurable": {"thread_id": f"test-thread-{req.ticket_id.lower()}"}}
         final_state = await graph.ainvoke(initial_state, config=thread_config)
         final_ctx = (
             final_state.get("context") if isinstance(final_state, dict) else getattr(final_state, "context", None)
@@ -234,13 +255,14 @@ async def run_test():
 
         # SPOQ tasks should be populated in state (no YAML files on disk)
         spoq_tasks = (
-            final_state.get("spoq_tasks") if isinstance(final_state, dict) else getattr(final_state, "spoq_tasks", [])
+            final_state.get("spoq_tasks", []) if isinstance(final_state, dict) else getattr(final_state, "spoq_tasks", [])
         )
+        assert isinstance(spoq_tasks, list), "Expected spoq_tasks to be a list"
         assert len(spoq_tasks) > 0, "Expected SPOQ tasks to be populated in GraphState"
         print(f"[PASSED] Verified {len(spoq_tasks)} SPOQ tasks in GraphState.")
 
         for platform in ["api", "flutter"]:
-            plat_workspace = workspace_dir / platform
+            plat_workspace = Path(final_ctx.platform_path(platform))
             assert plat_workspace.exists(), f"Expected project folder {plat_workspace} to exist."
             print(f"[PASSED] Verified project created at {plat_workspace}")
 

@@ -34,6 +34,7 @@ async def preflight_node(state: GraphState) -> GraphState:
     """
     state.last_node = "preflight_agent"
     ctx = state.context
+    assert ctx is not None, "preflight_node requires a JobContext"
 
     # Only run SPOQ state checks
     if not state.is_spoq or not ctx.spoq_epic_dir:
@@ -76,15 +77,15 @@ async def preflight_node(state: GraphState) -> GraphState:
         # Count statuses
         total = len(all_tasks)
         passed_count = sum(1 for t in all_tasks if t.status == "passed")
-        blocked_count = sum(1 for t in all_tasks if t.status == "blocked")
-        built_or_failed_count = sum(1 for t in all_tasks if t.status in ("built", "evaluate_failed", "repairing"))
+        needs_review_count = sum(1 for t in all_tasks if t.status == "needs_review")
+        built_or_failed_count = sum(1 for t in all_tasks if t.status in ("building", "evaluating", "repairing"))
         evaluating_count = sum(1 for t in all_tasks if t.status == "evaluating")
 
         logger.info(
-            "Preflight task check summary: total=%d, passed=%d, blocked=%d, built_or_failed=%d, evaluating=%d",
+            "Preflight task check summary: total=%d, passed=%d, needs_review=%d, built_or_failed=%d, evaluating=%d",
             total,
             passed_count,
-            blocked_count,
+            needs_review_count,
             built_or_failed_count,
             evaluating_count,
         )
@@ -94,12 +95,12 @@ async def preflight_node(state: GraphState) -> GraphState:
             logger.info("All tasks are already completed successfully. Skipping to publish.")
             skip_to = "publish_agent"
             state.done = True
-        elif blocked_count == total:
-            logger.info("All tasks are blocked. Skipping to finalize.")
+        elif needs_review_count == total:
+            logger.info("All tasks need review. Skipping to finalize.")
             skip_to = "finalize_agent"
             state.failed = True
         elif built_or_failed_count > 0:
-            logger.info("Found tasks in built/evaluate_failed/repairing state. Skipping planning, routing to builder.")
+            logger.info("Found tasks in building/evaluating/repairing state. Skipping planning, routing to builder.")
             skip_to = "builder_agent"
         elif evaluating_count > 0:
             logger.info("Found tasks in evaluating state. Skipping planning and building, routing to evaluator.")

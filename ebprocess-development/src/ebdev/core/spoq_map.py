@@ -188,7 +188,7 @@ def build_epic_tasks(epic: SPOQMapEpic, mocking_level: str = "live") -> list[SPO
                 status="pending",
                 phase=0,
                 dependencies=[],
-                skills_required=(["api"] if "api" in active_platforms else []),
+                skills_required=(["api"] if "api" in active_platforms else [active_platforms[0]] if active_platforms else []),
                 outputs=["OpenAPI YAML", "Database schema models"],
             )
         )

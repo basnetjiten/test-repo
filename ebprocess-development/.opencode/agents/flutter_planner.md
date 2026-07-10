@@ -81,6 +81,9 @@ Write the implementation plan as a standalone Markdown file at the path provided
 
 **Example Plan:**
 
+> [!WARNING]
+> The following is strictly an EXAMPLE. DO NOT copy this example verbatim. You MUST read the actual task details (Task Name, Description, requirements) from the context and generate a completely unique plan tailored to the user's specific request.
+
 ```markdown
 # Plan: Enquiry Form UI and Logic — Flutter
 

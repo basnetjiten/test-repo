@@ -59,7 +59,7 @@ exclude = [".venv", "workspace", ".opencode"]
 warn_unused_ignores = false
 disallow_untyped_defs = false
 
-[project.scripts]
+[tool.scripts]
 lint = "ruff check src/"
 lint-fix = "ruff check --fix src/"
 typecheck = "pyright src/"

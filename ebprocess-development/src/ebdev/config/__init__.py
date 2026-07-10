@@ -94,6 +94,14 @@ class Settings(BaseSettings):
         default="/Users/ebpearls/Desktop/starterkit/flutterkit",
         validation_alias="STARTERKIT_FLUTTER_PATH",
     )
+    STARTERKIT_CMS_PATH: str = Field(
+        default="/Users/ebpearls/Desktop/starterkit/ebtheme-cms",
+        validation_alias="STARTERKIT_CMS_PATH",
+    )
+    STARTERKIT_WEB_PATH: str = Field(
+        default="/Users/ebpearls/Desktop/starterkit/ebthemes-web",
+        validation_alias="STARTERKIT_WEB_PATH",
+    )
 
     # ------------------------------------------------------------------
     # Default project repo (overridable per request)

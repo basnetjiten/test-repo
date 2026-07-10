@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 
 from ebdev.core.constants import ErrorMessages, Prompts
 from ebdev.models.graph_state import JobContext
@@ -117,10 +118,18 @@ def agent_instructions(job_context: JobContext, storage_dir: Path, platform: str
     plan_path: Path | None = None
 
     if spoq_dir is not None:
-        # SPOQ mode: context and plan are inside active epic directory
+        # SPOQ mode: context files are inside the active epic directory.
+        # Two-tier context: manifest (shared) + platform slice (delta).
         epic_dir = storage_dir_container / spoq_dir
+        manifest_path = epic_dir / "context.json"
         context_path = epic_dir / f"context_{plat}.json"
         plan_path = epic_dir / f"{job_context.active_task_id}.md"
+    else:
+        # Non-SPOQ (legacy) mode: resolve paths using task_id directory naming.
+        context_path, legacy_plan_path_obj = _legacy_task_paths(storage_dir_container, job_context.task_id, plat)
+        # Manifest sits alongside the platform slice in the same task directory.
+        manifest_path = context_path.parent / "context.json"
+        plan_path = legacy_plan_path_obj
 
     # Evaluator instructions
     if agent == "code_evaluator" or "evaluator" in agent:
@@ -147,9 +156,13 @@ def agent_instructions(job_context: JobContext, storage_dir: Path, platform: str
         )
         if spoq_dir is not None:
             assert plan_path is not None
+            assert context_path is not None
             return f"""<{Prompts.INSTRUCTIONS_TAG}>
 {Prompts.PHASE_PLANNING}
 - GOAL: Create a comprehensive implementation plan for task {job_context.active_task_id} based on your codebase audit.
+- CONTEXT READING: You MUST read both context files before planning:
+  1. Shared epic manifest at {manifest_path} — ticket details, all endpoints, full shared_context.
+  2. Your platform slice at {context_path} — your repo_path, active_task_id, and your platform's task_contexts only.
 - REQUIREMENT: You MUST save the plan using the `write` tool as a Markdown file at {plan_path}.
 - CRITICAL CONSTRAINT: Do NOT print the plan content in your chat response. Your chat response must contain ONLY the final JSON object. You MUST write the plan to the file using the `write` tool first, then output the final JSON object.
 - CRITICAL REQUIREMENT: In your very first step, you MUST use the `read` tool to inspect the guidelines inside the `/.opencode/skills/` directory for your platform:
@@ -157,13 +170,15 @@ def agent_instructions(job_context: JobContext, storage_dir: Path, platform: str
   Your plan MUST strictly adopt the exact folder paths, base classes, and structural layers defined in these skills. If your plan fails to use these paths and patterns, you have FAILED.
 - Required Plan Shape: Adopt the exact heading styles, audit tables, and layout sections (Objective, Scope, Technical Audit table, Implementation Steps, Verification) defined in your system instruction. Write every file you will touch in the Technical Audit table.
 </{Prompts.INSTRUCTIONS_TAG}>"""
-        context_path, legacy_plan_path = _legacy_task_paths(storage_dir_container, job_context.task_id, plat)
         assert context_path is not None
-        assert legacy_plan_path is not None
+        assert plan_path is not None
         return f"""<{Prompts.INSTRUCTIONS_TAG}>
 {Prompts.PHASE_PLANNING}
-- GOAL: Create a comprehensive implementation plan based on the requirements in {context_path}.
-- REQUIREMENT: You MUST save the plan using the `write` tool to the path specified under `Implementation Plan` ({legacy_plan_path}).
+- GOAL: Create a comprehensive implementation plan based on the requirements in your context files.
+- CONTEXT READING: You MUST read both context files before planning:
+  1. Shared epic manifest at {manifest_path} — ticket details, all endpoints, full shared_context.
+  2. Your platform slice at {context_path} — your repo_path, active_task_id, and your platform's task_contexts only.
+- REQUIREMENT: You MUST save the plan using the `write` tool to the path specified under `Implementation Plan` ({plan_path}).
  - CRITICAL CONSTRAINT: Do NOT print the plan content in your chat response. Your chat response must contain ONLY the final JSON object. You MUST write the plan to the file using the `write` tool first, then output the final JSON object.
 - CRITICAL REQUIREMENT: In your very first step, you MUST use the `read` tool to inspect the guidelines inside the `/.opencode/skills/` directory for your platform:
 {skills_str}
@@ -196,7 +211,6 @@ def agent_instructions(job_context: JobContext, storage_dir: Path, platform: str
 </{Prompts.INSTRUCTIONS_TAG}>"""
 
     # Builder / Implementer instructions
-    import os
 
     mock_req = ""
     if job_context.mocking_level == "mock_repositories":
@@ -222,16 +236,17 @@ def agent_instructions(job_context: JobContext, storage_dir: Path, platform: str
         assert plan_path is not None
         plan_source = f'Implement the plan found at {plan_path}. If that plan file does not exist, immediately output: {{\\"status\\": \\"error\\", \\"reason\\": \\"Plan file {plan_path} is missing.\\"}} and stop.'
     else:
-        context_path, legacy_plan_path = _legacy_task_paths(storage_dir_container, job_context.task_id, plat)
         assert context_path is not None
-        assert legacy_plan_path is not None
-        plan_source = f'Implement the plan found at {legacy_plan_path}. If that plan file does not exist, immediately output: {{\\"status\\": \\"error\\", \\"reason\\": \\"{ErrorMessages.PLAN_MISSING.format(plan_path=legacy_plan_path)}\\"}} and stop.'
+        assert plan_path is not None
+        plan_source = f'Implement the plan found at {plan_path}. If that plan file does not exist, immediately output: {{\\"status\\": \\"error\\", \\"reason\\": \\"{ErrorMessages.PLAN_MISSING.format(plan_path=plan_path)}\\"}} and stop.'
 
     return f"""<{Prompts.INSTRUCTIONS_TAG}>
 {Prompts.PHASE_IMPLEMENTATION}
 
 <REQUIREMENTS>
-- Read the requirements from the context file found at {context_path}.
+- CONTEXT READING: Read your context in two steps:
+  1. Shared epic manifest at {manifest_path} — ticket info, all endpoints, full shared_context.
+  2. Your platform slice at {context_path} — your repo_path, active_task_id, and your platform's task_contexts only.
 - {plan_source}
 - CRITICAL: You MUST use absolute paths starting with '{repo_path}/' for all file operations in the `write`, `read`, `edit`, `grep`, and `glob` tools. Do NOT use relative paths (e.g., use '{repo_path}/{example_file}' instead of '{example_file}') in tool arguments, as relative paths will resolve to the incorrect default directory (/app).
 - CRITICAL: You MUST anchor all commands and file operations in the repository workspace. Run `cd {repo_path}` before editing, creating files or running compilation/test tools.
@@ -260,20 +275,23 @@ def build_prompt(
     # Resolve platform tech stack hints
     tech_stack = PLATFORM_TECH_STACK.get(plat, f"Platform: {plat}")
 
-    # Resolve context file & plan file strings based on SPOQ execution mode
+    # Resolve context file & plan file strings based on execution mode (SPOQ or legacy).
+    # Two-tier context: manifest (context.json) + platform slice (context_{plat}.json).
     if spoq_epic_dir is not None:
         epic_dir = storage_dir_container / spoq_epic_dir
-        reqs_file_str = f"Requirements File:    {epic_dir}/context_{plat}.json"
-        plan_file_str = f"SPOQ Task Plan File:  {epic_dir}/{job_context.active_task_id}.md"
+        manifest_file_str = f"Epic Manifest (shared):  {epic_dir}/context.json"
+        slice_file_str = f"Platform Slice ({plat}): {epic_dir}/context_{plat}.json"
+        plan_file_str = f"SPOQ Task Plan File:     {epic_dir}/{job_context.active_task_id}.md"
         map_file_str = None
         if spoq_map_dir is not None:
-            map_file_str = f"SPOQ Map File:        {to_container_path(Path(spoq_map_dir))}/MAP.md"
+            map_file_str = f"SPOQ Map File:           {to_container_path(Path(spoq_map_dir))}/MAP.md"
         map_line = f"\n- {map_file_str}" if map_file_str else ""
     else:
-        # Fallback/Legacy plan naming resolution
+        # Non-SPOQ (legacy) path — same two-tier structure, different directory.
         context_path, plan_path = _legacy_task_paths(storage_dir_container, job_context.task_id, plat)
-        reqs_file_str = f"Requirements File:    {context_path}"
-        plan_file_str = f"Implementation Plan:  {plan_path}"
+        manifest_file_str = f"Epic Manifest (shared):  {context_path.parent}/context.json"
+        slice_file_str = f"Platform Slice ({plat}): {context_path}"
+        plan_file_str = f"Implementation Plan:     {plan_path}"
         map_line = ""
 
     return f"""<{Prompts.ROLE_TAG}>
@@ -293,7 +311,8 @@ Execute your role as the {job_context.current_agent} for job {job_context.ticket
 <{Prompts.PATHS_TAG}>
 - Centralized Metadata: {storage_dir_container}
 - Repository Workspace: {repo_dir} (All code changes MUST happen here)
-- {reqs_file_str}
+- {manifest_file_str}
+- {slice_file_str}
 - {plan_file_str}{map_line}
 </{Prompts.PATHS_TAG}>
 
@@ -378,6 +397,31 @@ Determine:
    - "ui_stubs": Pure UI presentation — no backend, no real data models needed.
    IMPORTANT: If ANY task has 'api' in its platforms list, mocking_level MUST be "live".
 6. Reasoning: Explain the rationale.
+7. primary_feature_name: The main feature/entity name derived from the ticket (e.g. "enquiry", "user", "wellness_tips").
+8. endpoints: A list of API endpoints expected to be created/changed, where each is:
+   {{
+     "entity": "enquiry",
+     "task_id": "task_id_string",
+     "suggested_routes": ["POST /enquiry", "GET /enquiries"],
+     "graphql_mutation": "createEnquiry" (or null)
+   }}
+9. task_contexts: A dictionary mapping each task ID string to its context, where each context is:
+   {{
+     "task_name": "...",
+     "feature_name": "enquiry",
+     "platforms": ["api"],
+     "needs_schema": true | false,
+     "needs_ui": true | false,
+     "expected_files": {{
+       "api": ["libs/data-access/src/enquiry/enquiry.schema.ts", ...],
+       "flutter": ["lib/features/enquiry/domain/repositories/enquiry_repository.dart", ...],
+       "cms": ["src/features/enquiry/components/enquiryForm.tsx", ...],
+       "web": ["src/app/(dashboard)/enquiry/page.tsx", ...]
+     }},
+     "data_access_registrations": ["libs/data-access/src/index.ts -> export * from './enquiry';", ...],
+     "app_module_registrations": ["apps/api/src/app.module.ts -> import EnquiryModule...", ...]
+   }}
+   IMPORTANT: Ensure that the file structures align with the project's existing codebase patterns (e.g., NestJS for APIs, Clean Architecture with Cubit for Flutter, React/Next.js for CMS and Web).
 
  You MUST return your decision as this exact JSON object with no markdown fences:
  {{
@@ -387,6 +431,9 @@ Determine:
    "execution_mode": "spoq" | "parallel" | "sequential",
    "mocking_level": "live" | "mock_repositories" | "ui_stubs",
    "max_repair_iterations": 3,
-   "reasoning": "rationale here"
+   "reasoning": "rationale here",
+   "primary_feature_name": "feature_name_here",
+   "endpoints": [ ... ],
+   "task_contexts": {{ ... }}
  }}
 """

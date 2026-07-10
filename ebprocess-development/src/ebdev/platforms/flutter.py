@@ -14,6 +14,7 @@ Responsibilities
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 from ebdev.core.exceptions import PlatformStrategyError
 from ebdev.core.logger import get_logger
@@ -152,3 +153,58 @@ class FlutterStrategy(PlatformStrategy):
             f"Bootstrapping new boilerplate for {starter_type} is disabled. "
             "The repository must be pre-populated or cloned from a starter kit."
         )
+
+    async def post_prepare(self, repo_path: Path, new_name: str) -> None:
+        """
+        Rename the Flutter project package name in pubspec.yaml and refactor all
+        internal imports in the codebase (.dart files) to use the new package name.
+        """
+        pubspec_path = repo_path / "pubspec.yaml"
+        if not pubspec_path.exists():
+            return
+
+        # 1. Read pubspec.yaml and find the old package name
+        content = pubspec_path.read_text(encoding="utf-8")
+        match = re.search(r"^name:\s*([a-zA-Z0-9_\-]+)", content, re.MULTILINE)
+        if not match:
+            logger.warning("Could not find name field in pubspec.yaml at %s", pubspec_path)
+            return
+        old_package_name = match.group(1).strip()
+
+        if old_package_name == new_name:
+            logger.info("Flutter project package name already matches target: %s", new_name)
+            return
+
+        logger.info("Refactoring Flutter package from %r to %r...", old_package_name, new_name)
+
+        # 2. Update the name: field inside pubspec.yaml
+        new_content = content.replace(f"name: {old_package_name}", f"name: {new_name}", 1)
+        pubspec_path.write_text(new_content, encoding="utf-8")
+
+        # 3. Update build.yaml ferry schema references (schema: old_name| -> schema: new_name|)
+        build_yaml_path = repo_path / "build.yaml"
+        if build_yaml_path.exists():
+            build_content = build_yaml_path.read_text(encoding="utf-8")
+            updated_build = build_content.replace(f"schema: {old_package_name}|", f"schema: {new_name}|")
+            if updated_build != build_content:
+                build_yaml_path.write_text(updated_build, encoding="utf-8")
+                logger.info("Updated build.yaml schema references from %r to %r", old_package_name, new_name)
+
+        # 4. Recursively refactor all imports in .dart files under lib/ and test/
+        lib_dir = repo_path / "lib"
+        test_dir = repo_path / "test"
+
+        old_import_prefix = f"package:{old_package_name}/"
+        new_import_prefix = f"package:{new_name}/"
+
+        for folder in (lib_dir, test_dir):
+            if not folder.exists():
+                continue
+            for file_path in folder.glob("**/*.dart"):
+                try:
+                    code = file_path.read_text(encoding="utf-8")
+                    if old_import_prefix in code:
+                        updated_code = code.replace(old_import_prefix, new_import_prefix)
+                        file_path.write_text(updated_code, encoding="utf-8")
+                except Exception as e:
+                    logger.error("Failed to refactor Dart imports in %s: %s", file_path, e)

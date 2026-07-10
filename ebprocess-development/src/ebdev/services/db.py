@@ -74,7 +74,7 @@ async def init_db() -> None:
     if not config.POSTGRES_URL:
         return
     try:
-        import asyncpg
+        import asyncpg  # noqa: PLC0415
 
         conn = await asyncpg.connect(config.POSTGRES_URL)
         try:
@@ -116,7 +116,7 @@ async def update_job_status(result: JobResult) -> bool:
     """
     if config.POSTGRES_URL:
         try:
-            import asyncpg
+            import asyncpg  # noqa: PLC0415
         except ImportError:
             logger.warning("asyncpg not installed. Falling back to local JSON database.")
         else:
@@ -182,7 +182,7 @@ async def save_session_id(task_id: str, session_id: str, jira_id: str | None = N
     """
     if config.POSTGRES_URL:
         try:
-            import asyncpg
+            import asyncpg  # noqa: PLC0415
         except ImportError:
             pass
         else:
@@ -236,7 +236,7 @@ async def get_session_id(task_id: str) -> str | None:
     """
     if config.POSTGRES_URL:
         try:
-            import asyncpg
+            import asyncpg  # noqa: PLC0415
         except ImportError:
             pass
         else:
@@ -275,7 +275,7 @@ async def get_session_id_by_jira_id(ticket_id: str) -> str | None:
     """
     if config.POSTGRES_URL:
         try:
-            import asyncpg
+            import asyncpg  # noqa: PLC0415
         except ImportError:
             pass
         else:
@@ -318,9 +318,13 @@ async def sync_state_to_db(state: GraphState) -> bool:
     bool
         True if database sync succeeded.
     """
+    if not state.context or not state.context.ticket_id:
+        logger.warning("Skipping DB state sync: state.context or ticket_id is missing.")
+        return False
+
     if config.POSTGRES_URL:
         try:
-            import asyncpg
+            import asyncpg  # noqa: PLC0415
         except ImportError:
             pass
         else:
@@ -376,7 +380,7 @@ async def check_db() -> bool:
     if not config.POSTGRES_URL:
         return True  # no DB configured = not degraded
     try:
-        import asyncpg
+        import asyncpg  # noqa: PLC0415
 
         conn = await asyncpg.connect(config.POSTGRES_URL, timeout=3)
         await conn.execute("SELECT 1")

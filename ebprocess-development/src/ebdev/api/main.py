@@ -1,11 +1,13 @@
 import asyncio
+import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, Dict, List
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from langchain_core.runnables import RunnableConfig
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from ebdev.config import config
 from ebdev.core.exceptions import EbDevError, GitServiceError, OpenCodeExecutionError, UnsupportedPlatformError
@@ -15,6 +17,8 @@ from ebdev.core.telemetry import instrument_fastapi, setup_telemetry
 from ebdev.models.graph_state import GraphState, JobContext
 from ebdev.models.spoq import SPOQMapEpic
 from ebdev.models.ticket import EpicTask, SprintTicket
+from ebdev.services.db import check_db, close_db, init_db
+from ebdev.services.epic_state import get_epic_state_service
 from ebdev.services.git import GitConflictError
 
 setup_logging()
@@ -27,16 +31,12 @@ logger = get_logger(__name__)
 async def lifespan(_app: FastAPI):
     # Startup
     try:
-        from ebdev.services.db import init_db
-
         await init_db()
     except Exception as e:
         logger.error("Error during startup database initialization: %s", e)
     yield
     # Shutdown — clean up resources
     try:
-        from ebdev.services.db import close_db
-
         await close_db()
     except Exception as e:
         logger.warning("Error closing database connections: %s", e)
@@ -101,8 +101,6 @@ async def health_check() -> dict:
 
     # Check database connectivity
     try:
-        from ebdev.services.db import check_db
-
         db_ok = await check_db()
         status["checks"]["database"] = "ok" if db_ok else "degraded"
         if not db_ok:
@@ -135,6 +133,124 @@ class ExecutePipelineRequest(BaseModel):
     map_id: str | None = None
     epics: List[SPOQMapEpic] = Field(default_factory=list)
     resume: bool = True
+    rework_failed_tasks: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def pre_validate(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            # Check for GraphQL nested data
+            planning = None
+            if "data" in data and isinstance(data["data"], dict) and "getProjectPlanning" in data["data"]:
+                planning = data["data"]["getProjectPlanning"]
+            elif "getProjectPlanning" in data and isinstance(data["getProjectPlanning"], dict):
+                planning = data["getProjectPlanning"]
+
+            if planning:
+                logger.info("Converting raw GraphQL planning payload to ExecutePipelineRequest")
+                raw_epics = planning.get("epics") or []
+                converted_epics = []
+                all_platforms = set()
+                all_tasks = []
+
+                for epic in raw_epics:
+                    epic_id = str(epic.get("id"))
+                    if not epic_id.startswith("Epic-"):
+                        epic_id = f"Epic-{epic_id}"
+
+                    epic_tasks = []
+                    for t in epic.get("tasks") or []:
+                        t_id = t.get("id")
+                        t_name = t.get("name", "")
+                        t_status = t.get("status", "todo")
+
+                        # Normalize status to lowercase alphanumeric with underscores
+                        t_status_norm = t_status.lower().replace(" ", "_")
+
+                        plat_data = t.get("platform") or {}
+                        plat_id = plat_data.get("id")
+                        plat_name = plat_data.get("name", "")
+
+                        # Estimated hours
+                        est_hour = float(t.get("originalEstimateHour") or 0.0)
+
+                        # Track all platforms
+                        normalized_plat = plat_name.lower()
+                        if normalized_plat == "web app":
+                            normalized_plat = "web"
+                        if normalized_plat:
+                            all_platforms.add(normalized_plat)
+
+                        task_hour = {
+                            "estimatedHour": est_hour,
+                            "taskId": t_id,
+                            "platformId": plat_id,
+                            "platform": {
+                                "id": plat_id,
+                                "name": plat_name
+                            }
+                        }
+
+                        epic_tasks.append({
+                            "id": t_id,
+                            "name": t_name,
+                            "status": t_status_norm,
+                            "hours": [task_hour]
+                        })
+
+                    converted_epics.append({
+                        "id": epic_id,
+                        "title": epic.get("name", "Unnamed Epic"),
+                        "description": epic.get("name", "Unnamed Epic"),
+                        "status": "planned",
+                        "sprint": "sprint-1",
+                        "depends_on": [],
+                        "platforms": list(dict.fromkeys([
+                            "web" if p.lower() == "web app" else p.lower()
+                            for p in [t.get("platform", {}).get("name", "") for t in epic.get("tasks") or []]
+                            if p
+                        ])),
+                        "tasks": epic_tasks,
+                        "acceptance_criteria": [],
+                        "estimated_hours": sum(
+                            float(t.get("originalEstimateHour") or 0.0)
+                            for t in epic.get("tasks") or []
+                        )
+                    })
+                    all_tasks.extend(epic_tasks)
+
+                # Set request level fields
+                first_epic = converted_epics[0] if converted_epics else {}
+                default_space = os.environ.get("SPACE_NAME") or data.get("space_name") or "tobeme"
+
+                data["id"] = data.get("id") or planning.get("id") or 918
+                data["space_name"] = default_space
+                data["ticket_id"] = data.get("ticket_id") or first_epic.get("id") or f"Epic-{data['id']}"
+                data["title"] = data.get("title") or first_epic.get("title") or planning.get("name", "Project Planning")
+                data["description"] = data.get("description") or first_epic.get("description") or planning.get("name", "Project Planning")
+                data["tasks"] = all_tasks
+                data["platforms"] = list(all_platforms) if all_platforms else ["flutter", "api"]
+                data["epics"] = converted_epics
+
+                if "project_repo" not in data:
+                    data["project_repo"] = config.DEFAULT_PROJECT_REPO
+
+                if "starter_types" not in data:
+                    starter_map = {}
+                    for p in all_platforms:
+                        if p == "api":
+                            starter_map["api"] = "nestjs"
+                        elif p == "flutter":
+                            starter_map["flutter"] = "flutter"
+                        elif p == "web":
+                            starter_map["web"] = "nextjs"
+                        elif p == "cms":
+                            starter_map["cms"] = "react"
+                    data["starter_types"] = starter_map
+
+                return data
+
+        return data
 
 
 MAX_RETRIES = config.MAX_RETRIES
@@ -164,7 +280,7 @@ async def _invoke_with_retry(graph: Any, initial_state: GraphState | None, confi
 
 def _is_transient_db_error(exc: Exception) -> bool:
     try:
-        import psycopg
+        import psycopg  # noqa: PLC0415
 
         if isinstance(exc, psycopg.OperationalError):
             return True
@@ -212,6 +328,42 @@ async def execute_pipeline(request: ExecutePipelineRequest):
 
     try:
         # ------------------------------------------------------------------
+        # Rework Failed Tasks Logic
+        # ------------------------------------------------------------------
+        if request.rework_failed_tasks:
+            # Resolve the in-repo epic directory based on space_name
+            epic_dir = Path(config.WORKSPACE_DIR) / request.space_name / ".ebpearls" / request.ticket_id
+
+            svc = get_epic_state_service(epic_dir)
+            snapshot = await svc.load()
+            if snapshot:
+                updated_tasks = False
+                for task_id, task in snapshot.tasks.items():
+                    if task.status in ("needs_review", "failed"):
+                        logger.info("Rework requested: Task %s changed from %s to building.", task_id, task.status)
+                        task.status = "building"
+                        task.repair_iteration = 0
+                        updated_tasks = True
+                if updated_tasks:
+                    await svc.save(snapshot)
+
+            # Force LangGraph to wipe the dead thread so it starts fresh at preflight
+            request.resume = False
+
+        # ------------------------------------------------------------------
+        # Clear stale state.json if running fresh (resume = False)
+        # ------------------------------------------------------------------
+        if not request.resume and not request.rework_failed_tasks:
+            epic_dir = Path(config.WORKSPACE_DIR) / request.space_name / ".ebpearls" / request.ticket_id
+            state_json_path = epic_dir / "state.json"
+            if state_json_path.exists():
+                try:
+                    state_json_path.unlink()
+                    logger.info("Successfully deleted stale state.json at %s", state_json_path)
+                except Exception as exc:
+                    logger.warning("Failed to delete stale state.json at %s: %s", state_json_path, exc)
+
+        # ------------------------------------------------------------------
         # Checkpoint-aware resume logic
         # ------------------------------------------------------------------
         # graph.aget_state() returns a StateSnapshot if a checkpoint exists
@@ -230,22 +382,9 @@ async def execute_pipeline(request: ExecutePipelineRequest):
 
         was_resumed = False
 
-        if existing_state is not None and existing_state.next:
-            pending = existing_state.next
-            if request.resume:
-                logger.info(
-                    "Resuming pipeline from checkpoint for %s (pending: %s)",
-                    request.ticket_id,
-                    pending,
-                )
-                # None input tells LangGraph to load the last checkpoint state
-                final_state = await _invoke_with_retry(graph, None, config)
-                was_resumed = True
-            else:
-                logger.info(
-                    "Resume disabled — clearing checkpoint history for %s.",
-                    request.ticket_id,
-                )
+        if existing_state is not None:
+            if not request.resume:
+                logger.info("Resume disabled — clearing checkpoint history for %s.", request.ticket_id)
                 checkpointer = getattr(graph, "checkpointer", None)
                 if checkpointer is not None and hasattr(checkpointer, "adelete_thread"):
                     try:
@@ -257,6 +396,13 @@ async def execute_pipeline(request: ExecutePipelineRequest):
                             exc,
                             exc_info=True,
                         )
+                final_state = await _invoke_with_retry(graph, initial_state, config)
+            elif existing_state.next:
+                logger.info("Resuming pipeline from checkpoint for %s (pending: %s)", request.ticket_id, existing_state.next)
+                final_state = await _invoke_with_retry(graph, None, config)
+                was_resumed = True
+            else:
+                logger.info("Pipeline already finished for %s. Returning existing final state.", request.ticket_id)
                 final_state = await _invoke_with_retry(graph, initial_state, config)
         else:
             logger.info("Starting fresh pipeline for %s.", request.ticket_id)

@@ -13,6 +13,7 @@ Responsibilities
 
 from __future__ import annotations
 
+import httpx
 import os
 import shutil
 import subprocess
@@ -421,8 +422,6 @@ class RemoteRepoService:
         provider, workspace, slug = parsed
         logger.info("Checking remote repository: provider=%s, workspace/owner=%s, slug=%s", provider, workspace, slug)
 
-        import httpx
-
         if provider == "bitbucket":
             # Auth
             user = config.BITBUCKET_USERNAME or config.GIT_USER
@@ -431,13 +430,9 @@ class RemoteRepoService:
 
             get_url = f"{BITBUCKET_API_BASE}/repositories/{workspace}/{slug}"
 
-            req_kwargs = {}
-            if auth is not None:
-                req_kwargs["auth"] = auth
-
             async with httpx.AsyncClient() as client:
                 try:
-                    res = await client.get(get_url, **req_kwargs)
+                    res = await client.get(get_url, auth=auth)
                     if res.status_code == 200:
                         logger.info("Bitbucket repository '%s/%s' exists.", workspace, slug)
                         return True
@@ -445,7 +440,9 @@ class RemoteRepoService:
                         logger.info("Bitbucket repository '%s/%s' not found. Creating...", workspace, slug)
                         create_url = f"{BITBUCKET_API_BASE}/repositories/{workspace}/{slug}"
                         payload = {"scm": "git", "is_private": True, "project": {"key": project_key}}
-                        create_res = await client.post(create_url, json=payload, **req_kwargs)
+                        create_res = await client.post(
+                            create_url, json=payload, auth=auth if auth is not None else httpx.USE_CLIENT_DEFAULT
+                        )
                         if create_res.status_code in (200, 201):
                             logger.info("Bitbucket repository '%s/%s' successfully created.", workspace, slug)
                             return True
@@ -477,7 +474,7 @@ class RemoteRepoService:
                         logger.info("GitHub repository '%s/%s' not found. Creating...", workspace, slug)
                         user = config.GITHUB_USER or config.GIT_USER
 
-                        if workspace.lower() == user.lower():
+                        if workspace.lower() == user:
                             create_url = f"{GITHUB_API_BASE}/user/repos"
                         else:
                             create_url = f"{GITHUB_API_BASE}/orgs/{workspace}/repos"

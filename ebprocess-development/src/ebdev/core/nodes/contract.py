@@ -44,7 +44,7 @@ async def contract_node(state: GraphState) -> GraphState:
     """
     state.last_node = "contract_agent"
     ctx = state.context
-    platforms = ctx.platforms
+    platforms = ctx.platforms if ctx else []
 
     await send_progress(state, "Contract check: Running cross-platform verification contracts...")
 

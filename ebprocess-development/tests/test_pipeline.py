@@ -2,6 +2,7 @@
 """Integration test script to dry-run the concurrent LangGraph orchestration pipeline."""
 
 import asyncio
+import json
 import os
 import sys
 from pathlib import Path
@@ -10,6 +11,13 @@ from unittest.mock import MagicMock, patch
 # Ensure src directory is in python path for local execution of scratch scripts
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+# Set test environment overrides before config import to prevent writing to real .opencode
+os.environ["OPENCODE_PROJECT_DIR"] = "/tmp/ebtest/opencode"
+os.environ["WORKSPACE_DIR"] = "/tmp/ebtest/workspace"
+
+from langchain_core.runnables import RunnableConfig
+
+from ebdev.api.main import ExecutePipelineRequest
 from ebdev.config import config
 from ebdev.models.graph_state import GraphState, JobContext, JobResult
 from ebdev.models.ticket import SprintTicket
@@ -22,44 +30,42 @@ def _discover_space_name() -> str:
 async def run_test():
     print("=== STARTING CONCURRENT MULTI-PLATFORM PIPELINE DRY RUN ===")
 
-    # Initialize a mock SprintTicket
+    planning_path = Path(__file__).resolve().parent / "task_planning.json"
+    with open(planning_path, "r", encoding="utf-8") as f:
+        raw_planning = json.load(f)
+
+    # Filter tasks to keep only api and flutter to avoid unpatched web/cms strategies
+    if "data" in raw_planning and "getProjectPlanning" in raw_planning["data"]:
+        planning = raw_planning["data"]["getProjectPlanning"]
+        for epic in planning.get("epics", []):
+            epic["tasks"] = [
+                t for t in epic.get("tasks", [])
+                if t.get("platform", {}).get("name", "").lower() in ["api", "flutter"]
+            ]
+
+    # Validate using ExecutePipelineRequest to convert raw planning format
+    req = ExecutePipelineRequest.model_validate(raw_planning)
+
     ticket = SprintTicket(
-        id="EPIC-101",
-        title="Build Offline-First User Authentication Epic",
-        description="Implement local-first cache and background sync offline database storage on mobile, and REST API session validation on backend.",
-        status="To Do",
-        acceptance_criteria=["Offline synchronization operational", "Client-Server Contract verified"],
-        tasks=[
-            {
-                "id": 50101,
-                "name": "Implement auth session storage",
-                "status": "todo",
-                "hours": [
-                    {"estimatedHour": 1.0, "taskId": 50101, "platformId": 1, "platform": {"id": 1, "name": "flutter"}},
-                    {"estimatedHour": 1.0, "taskId": 50101, "platformId": 3, "platform": {"id": 3, "name": "api"}},
-                ],
-            },
-            {
-                "id": 50102,
-                "name": "Background sync and validation",
-                "status": "todo",
-                "hours": [
-                    {"estimatedHour": 1.0, "taskId": 50102, "platformId": 1, "platform": {"id": 1, "name": "flutter"}},
-                ],
-            },
-        ],
+        id=req.ticket_id,
+        title=req.title,
+        description=req.description,
+        status="todo",
+        tasks=req.tasks,
         figma_url=None,
     )
 
     # Initialize JobContext running BOTH platforms (sequential stage planning will run api, then flutter)
     context = JobContext(
-        job_id="job_epic_101",
+        task_id=f"job_{req.ticket_id.lower()}",
         space_name=_discover_space_name(),
-        ticket_id="EPIC-101",
+        ticket_id=req.ticket_id,
         ticket=ticket,
         repo_path=str(Path(config.WORKSPACE_DIR) / _discover_space_name()),
-        platforms=["flutter", "api"],
+        platforms=req.platforms,
         current_agent="plan",
+        map_id=req.map_id,
+        map_epics=req.epics,
     )
 
     # Initialize initial state
@@ -125,14 +131,52 @@ async def run_test():
         print(f"-> [Mock Subprocess] Executing: {' '.join(args)}")
         return mock_process
 
-    import json
 
     # Mock OpenCode API client for orchestration node
     async def mock_create_session(self, title=None):
         return "mock-session-orchestrator"
 
     async def mock_send_prompt_message(self, session_id, agent, prompt, model=None):
-        strategy_data = {"complexity": "low", "execution_mode": "sequential", "mocking_rules": "mock all things"}
+        strategy_data = {
+            "complexity": "low",
+            "execution_mode": "sequential",
+            "mocking_rules": "mock all things",
+            "primary_feature_name": "tips",
+            "endpoints": [
+                {
+                    "entity": "tips",
+                    "task_id": "276042",
+                    "suggested_routes": ["GET /tips/daily"],
+                    "graphql_mutation": "getDailyTip",
+                }
+            ],
+            "task_contexts": {
+                "276042": {
+                    "task_name": "Show daily wellness tips to users",
+                    "feature_name": "tips",
+                    "platforms": ["api"],
+                    "needs_schema": True,
+                    "needs_ui": False,
+                    "expected_files": {
+                        "api": ["libs/data-access/src/tips/tips.schema.ts"],
+                    },
+                    "data_access_registrations": [],
+                    "app_module_registrations": [],
+                },
+                "276041": {
+                    "task_name": "Show daily wellness tips to users",
+                    "feature_name": "tips",
+                    "platforms": ["flutter"],
+                    "needs_schema": False,
+                    "needs_ui": True,
+                    "expected_files": {
+                        "flutter": ["lib/features/tips/presentation/pages/tips_page.dart"],
+                    },
+                    "data_access_registrations": [],
+                    "app_module_registrations": [],
+                }
+            },
+        }
         return {"parts": [{"type": "text", "text": f"```json\n{json.dumps(strategy_data)}\n```"}]}
 
     # Patch execution endpoints to bypass real subprocess calls
@@ -156,6 +200,13 @@ async def run_test():
         patch("ebdev.platforms.api.ApiStrategy.bootstrap"),
         patch("asyncio.create_subprocess_exec", side_effect=mock_create_subprocess),
         patch("ebdev.core.nodes.publish._create_github_pr", return_value="https://github.com/mock/pr/epic-101"),
+        # Prevent mock session IDs from being written to or read from real Postgres/JSON DB.
+        # Without this, "mock-session-flutter" etc. get persisted and break future real runs.
+        patch("ebdev.core.nodes.generate.db.save_session_id", return_value=True),
+        patch("ebdev.core.nodes.generate.db.get_session_id", return_value=None),
+        patch("ebdev.core.nodes.generate.db.get_session_id_by_jira_id", return_value=None),
+        patch("ebdev.core.nodes.plan.db.save_session_id", return_value=True),
+        patch("ebdev.core.nodes.plan.db.get_session_id", return_value=None),
     ]
 
     for p in patches:
@@ -163,10 +214,10 @@ async def run_test():
 
     try:
         # Import graph after applying mocks
-        from ebdev.core.graph import graph
+        from ebdev.core.graph import graph  # noqa: PLC0415
 
         print("Invoking Graph...")
-        thread_config = {"configurable": {"thread_id": "test-thread-epic-101"}}
+        thread_config: RunnableConfig = {"configurable": {"thread_id": f"test-thread-{req.ticket_id.lower()}"}}
         final_state = await graph.ainvoke(initial_state, config=thread_config)
 
         print("\n=== CONCURRENT RUN COMPLETE ===")

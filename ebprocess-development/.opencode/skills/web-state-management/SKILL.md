@@ -1,10 +1,10 @@
 ---
 name: web-state-management
-description: Provides Zod schema patterns, React Hook Form integration, and TanStack Query data-fetching patterns for Next.js/React features. Use when a plan includes forms, API calls, or any validated user input.
+description: Provides Zod schema patterns, React Hook Form integration, Apollo Client 4 GraphQL patterns, Redux Toolkit slice patterns, and menu item definitions for Next.js + MUI features. Use when a plan includes forms, GraphQL operations, Redux state, or sidebar navigation.
 compatibility: opencode
 metadata:
   layer: presentation
-  pattern: zod-rhf-tanstack
+  pattern: z o d-rhf-apollo-redux
 ---
 
 # Skill: web-state-management
@@ -14,153 +14,281 @@ metadata:
 | Condition in Task Plan | When to Invoke |
 |---|---|
 | Plan includes a form or user input | Always — read Zod + React Hook Form section |
-| Plan includes API data fetching | Read TanStack Query section |
-| Plan scope includes `state` layer | Read both sections |
-| Plan adds query parameters or search filters | Read Zod section for URL param schemas |
+| Plan includes Apollo GraphQL operations | Read Apollo Client + Codegen + Module Hooks sections |
+| Plan adds or modifies Redux state | Read Redux Toolkit Slice section |
+| Plan adds sidebar navigation items | Read Menu Items section |
+| Plan uses URL query params or search filters | Read Zod section for URL param schemas |
+| Plan introduces new i18n strings | Read Localization section |
 
-## 1. Zod Schemas (`src/lib/{feature}/schemas.ts`)
+## 1. Zod Schemas (`src/types/{feature}.ts` or co-located)
 
-Define all schemas in one file. Infer TypeScript types from Zod — never duplicate type definitions.
+Define all validation schemas. Infer TypeScript types from Zod — never duplicate type definitions.
 
 ```typescript
 import { z } from 'zod';
 
-// Form schema — used by React Hook Form
-export const createUserSchema = z.object({
-  firstName: z.string().min(1, 'First name is required').max(50),
-  lastName: z.string().min(1, 'Last name is required').max(50),
-  email: z.string().email('Invalid email address'),
-  role: z.enum(['admin', 'user', 'viewer']),
+export const createProductSchema = z.object({
+  name: z.string().min(1, 'Name is required').max(100),
+  description: z.string().optional(),
+  price: z.number().positive('Price must be positive'),
+  category: z.enum(['electronics', 'clothing', 'food']),
+  active: z.boolean().default(true),
 });
 
-// Infer static TypeScript type — single source of truth
-export type CreateUserInput = z.infer<typeof createUserSchema>;
+export type CreateProductInput = z.infer<typeof createProductSchema>;
 
-// Query/filter schema — used for URL search params
-export const userFiltersSchema = z.object({
+// Filter/query schema
+export const productFiltersSchema = z.object({
   search: z.string().optional(),
-  role: z.enum(['admin', 'user', 'viewer']).optional(),
+  category: z.string().optional(),
   page: z.coerce.number().int().positive().default(1),
+  limit: z.coerce.number().int().positive().default(10),
 });
 
-export type UserFilters = z.infer<typeof userFiltersSchema>;
+export type ProductFilters = z.infer<typeof productFiltersSchema>;
 ```
 
-## 2. React Hook Form Integration (`src/components/{feature}/{Feature}Form.tsx`)
+## 2. React Hook Form Integration
 
-```typescript
+```tsx
 'use client';
 
-import { useForm } from 'react-hook-form';
+import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { createUserSchema, type CreateUserInput } from '@/lib/users/schemas';
+import { TextField, Button, MenuItem } from '@mui/material';
+import { createProductSchema, type CreateProductInput } from '@/types/product';
 
-export function CreateUserForm() {
-  const {
-    register,
-    handleSubmit,
-    formState: { errors, isSubmitting },
-    reset,
-  } = useForm<CreateUserInput>({
-    resolver: zodResolver(createUserSchema),
-    defaultValues: {
-      role: 'user',
-    },
+export function ProductForm() {
+  const { control, handleSubmit, formState: { errors, isSubmitting } } = useForm<CreateProductInput>({
+    resolver: zodResolver(createProductSchema),
+    defaultValues: { active: true },
   });
 
-  const onSubmit = async (data: CreateUserInput) => {
-    // call server action or API
+  const onSubmit = async (data: CreateProductInput) => {
+    // call Apollo mutation or API
   };
 
   return (
     <form onSubmit={handleSubmit(onSubmit)} noValidate>
-      <input {...register('firstName')} />
-      {errors.firstName && <p role="alert">{errors.firstName.message}</p>}
-
-      <input {...register('email')} type="email" />
-      {errors.email && <p role="alert">{errors.email.message}</p>}
-
-      <button type="submit" disabled={isSubmitting}>
+      <Controller
+        name="name"
+        control={control}
+        render={({ field }) => (
+          <TextField {...field} label="Name" error={!!errors.name} helperText={errors.name?.message} fullWidth />
+        )}
+      />
+      <Controller
+        name="category"
+        control={control}
+        render={({ field }) => (
+          <TextField {...field} select label="Category" error={!!errors.category} helperText={errors.category?.message} fullWidth>
+            <MenuItem value="electronics">Electronics</MenuItem>
+            <MenuItem value="clothing">Clothing</MenuItem>
+            <MenuItem value="food">Food</MenuItem>
+          </TextField>
+        )}
+      />
+      <Button type="submit" variant="contained" disabled={isSubmitting}>
         {isSubmitting ? 'Saving...' : 'Submit'}
-      </button>
+      </Button>
     </form>
   );
 }
 ```
 
-## 3. TanStack Query — Data Fetching
+## 3. Apollo Client — GraphQL Setup
 
-### Query key factory (`src/lib/{feature}/queries.ts`)
+### Apollo Links (`src/apollo/links/`)
 ```typescript
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+// src/apollo/links/http-link.ts
+import { HttpLink } from '@apollo/client';
+export const httpLink = new HttpLink({
+  uri: process.env.NEXT_PUBLIC_API_ENDPOINT,
+  credentials: 'include'
+});
 
-// Centralized query key factory — prevents typos and enables precise invalidation
-export const userKeys = {
-  all: ['users'] as const,
-  lists: () => [...userKeys.all, 'list'] as const,
-  list: (filters: UserFilters) => [...userKeys.lists(), filters] as const,
-  detail: (id: string) => [...userKeys.all, 'detail', id] as const,
-};
+// src/apollo/links/auth-link.ts
+import { setContext } from '@apollo/client/link/context';
+import { getSession } from 'next-auth/react';
+export const authLink = setContext(async (_, { headers }) => {
+  const session = await getSession();
+  const token = session?.user?.access_token;
+  return { headers: { ...headers, ...(token ? { Authorization: token } : {}) } };
+});
+```
 
-// Fetch function (plain async — no React dep)
-export async function fetchUsers(filters: UserFilters) {
-  const params = new URLSearchParams(/* filters */);
-  const res = await fetch(`/api/users?${params}`);
-  if (!res.ok) throw new Error('Failed to fetch users');
-  return res.json();
-}
+### Client & Server Client (`src/apollo/client.ts`)
+```typescript
+import { ApolloClient, ApolloLink, InMemoryCache } from '@apollo/client';
+import { authLink, errorLink, httpLink } from '@/apollo/links';
 
-// React Query hook
-export function useUsers(filters: UserFilters) {
-  return useQuery({
-    queryKey: userKeys.list(filters),
-    queryFn: () => fetchUsers(filters),
-    staleTime: 1000 * 60 * 5, // 5 minutes
-  });
-}
+export const client = new ApolloClient({
+  link: ApolloLink.from([authLink, errorLink, httpLink]),
+  cache: new InMemoryCache()
+});
 
-// Mutation with cache invalidation
-export function useCreateUser() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: async (data: CreateUserInput) => {
-      const res = await fetch('/api/users', {
-        method: 'POST',
-        body: JSON.stringify(data),
-      });
-      if (!res.ok) throw new Error('Failed to create user');
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: userKeys.lists() });
-    },
-  });
+export const serverClient = new ApolloClient({
+  ssrMode: true,
+  link: httpLink,
+  cache: new InMemoryCache()
+});
+```
+
+## 4. GraphQL Operation Files & Codegen
+
+Create `.graphql` files in `src/modules/{feature}/graphql/`:
+
+```graphql
+# src/modules/products/graphql/queries.graphql
+query GetProducts($input: ProductListInput) {
+  getProducts(input: $input) {
+    products {
+      _id
+      name
+      price
+      category
+      active
+    }
+    pagination {
+      total
+      page
+      limit
+    }
+  }
 }
 ```
 
-## 4. Server Actions (Next.js App Router)
+```graphql
+# src/modules/products/graphql/mutations.graphql
+mutation CreateProduct($input: CreateProductInput!) {
+  createProduct(input: $input) {
+    _id
+    name
+  }
+}
 
-For forms that do NOT need optimistic UI, prefer Server Actions over client-side fetch:
+mutation DeleteProduct($id: ID!) {
+  deleteProduct(id: $id) {
+    success
+    message
+  }
+}
+```
+
+After creating `.graphql` files, run `npm run codegen` to generate typed hooks. Import from the co-located `*.generated.ts`:
 
 ```typescript
-// src/lib/{feature}/actions.ts
-'use server';
+import { useGetProductsQuery, useCreateProductMutation } from './graphql/queries.generated';
+```
 
-import { revalidatePath } from 'next/cache';
-import { createUserSchema } from './schemas';
+## 5. Module Hooks Pattern (`src/modules/{feature}/hooks/useGQL.tsx`)
 
-export async function createUserAction(formData: FormData) {
-  const raw = Object.fromEntries(formData);
-  const parsed = createUserSchema.safeParse(raw);
+```typescript
+import { useQuery, useMutation } from '@apollo/client';
+import { GET_PRODUCTS } from '@/modules/products/graphql/queries';
+import { CREATE_PRODUCT } from '@/modules/products/graphql/mutations';
 
-  if (!parsed.success) {
-    return { error: parsed.error.flatten().fieldErrors };
-  }
+const useGQL = () => ({
+  GET_PRODUCTS: (variables?: any) => useQuery(GET_PRODUCTS, {
+    variables,
+    fetchPolicy: 'cache-and-network'
+  }),
+  CREATE_PRODUCT: () => useMutation(CREATE_PRODUCT, {
+    refetchQueries: [{ query: GET_PRODUCTS }]
+  }),
+});
 
-  // persist to DB / call API
-  revalidatePath('/users');
-  return { success: true };
+export default useGQL;
+```
+
+## 6. Redux Toolkit Slice (`src/store/slices/{feature}.ts`)
+
+```typescript
+import { createSlice } from '@reduxjs/toolkit';
+
+interface ProductState {
+  selectedCategory: string | null;
+  viewMode: 'grid' | 'list';
 }
+
+const initialState: ProductState = {
+  selectedCategory: null,
+  viewMode: 'grid',
+};
+
+const productSlice = createSlice({
+  name: 'product',
+  initialState,
+  reducers: {
+    setCategory(state, action) {
+      state.selectedCategory = action.payload;
+    },
+    setViewMode(state, action) {
+      state.viewMode = action.payload;
+    },
+  },
+});
+
+export default productSlice.reducer;
+export const { setCategory, setViewMode } = productSlice.actions;
+```
+
+Register in `src/store/reducer.ts`:
+```typescript
+import productReducer from './slices/product';
+const reducer = combineReducers({ ..., product: productReducer });
+```
+
+## 7. Menu Items (`src/menu-items/{feature}.tsx`)
+
+```tsx
+import { FormattedMessage } from 'react-intl';
+import type { NavItemType } from 'types';
+
+// Import icon from @/components/shared/icons or @mui/icons-material
+
+const products: NavItemType = {
+  id: 'products',
+  title: <FormattedMessage id="products" />,
+  icon: ProductsIcon,  // Import the appropriate icon
+  type: 'group',
+  url: '/products',
+  children: [
+    {
+      id: 'product-list',
+      title: <FormattedMessage id="product-list" />,
+      type: 'item',
+      url: '/products/list',
+    },
+  ],
+};
+
+export default products;
+```
+
+Register in `src/menu-items/menu-items.tsx`:
+```typescript
+import products from './products';
+const menuItems = { items: [dashboard, products, pages] };
+```
+
+## 8. Localization (`src/utils/locales/en.json`)
+
+Add new keys to the existing JSON locale file:
+```json
+{
+  "products": "Products",
+  "product-list": "Product List",
+  "product-create": "Create Product",
+  "product-name": "Product Name",
+  "product-price": "Price"
+}
+```
+
+Use in components:
+```tsx
+import { FormattedMessage } from 'react-intl';
+<Typography variant="h4"><FormattedMessage id="products" /></Typography>
 ```
 
 ## Rules
@@ -168,7 +296,11 @@ export async function createUserAction(formData: FormData) {
 - Always define Zod schemas **before** writing form/fetch code — schema first, type inferred
 - Use `z.infer<typeof schema>` — never write a separate TypeScript `interface` that duplicates a Zod schema
 - Use `zodResolver` from `@hookform/resolvers/zod` for all React Hook Form validations
-- Use query key factories (object with `all`, `lists`, `list(filter)`, `detail(id)`) for all TanStack Query hooks
-- Prefer Server Actions for simple create/update/delete mutations; prefer TanStack Query for reads + optimistic mutations
-- Set `staleTime` on all queries — never leave it as 0 (causes waterfall refetches)
-- Add `noValidate` to `<form>` elements — Zod is the validation layer, not the browser
+- Run `npm run codegen` after creating/modifying `.graphql` files — codegen generates typed hooks
+- Import GraphQL hooks from the co-located `*.generated.ts` file, NOT from the raw `.graphql` file
+- Use Apollo Client 4 for GraphQL — do NOT use TanStack Query or SWR for GraphQL operations
+- Use Redux Toolkit `createSlice` with Immer mutable syntax for global state
+- Use `useDispatch` and `useSelector` from `src/store/index.ts` (typed versions)
+- Use `<FormattedMessage id="..." />` for all user-facing strings — add keys to `en.json`
+- Apply `noValidate` to `<form>` elements — Zod is the validation layer
+- Do NOT use Server Actions for GraphQL — the API is handled via Apollo Client

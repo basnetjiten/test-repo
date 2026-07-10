@@ -60,7 +60,7 @@ def extract_figma_url(description: str) -> str | None:
     return match.group(0) if match else None
 
 
-def extract_json_block(text: str, task_id: str) -> dict | None:
+def extract_json_block(text: str, task_id: str | list[str]) -> dict | None:
     """
     Parse the final message text to extract the agent's JobResult JSON structure.
 
@@ -68,8 +68,8 @@ def extract_json_block(text: str, task_id: str) -> dict | None:
     ----------
     text : str
         The raw reply text from the agent.
-    task_id : str
-        The job or ticket ID to match within the JSON.
+    task_id : str | list[str]
+        The job or ticket ID (or list of possible IDs) to match within the JSON.
 
     Returns
     -------
@@ -80,15 +80,16 @@ def extract_json_block(text: str, task_id: str) -> dict | None:
         return None
 
     candidate = text.strip()
+    task_ids = [task_id] if isinstance(task_id, str) else list(task_id)
 
     # Strategy 0: Accept a raw JSON object response first.
     try:
         data = json.loads(candidate)
         if isinstance(data, dict) and (
-            data.get("task_id") == task_id
-            or data.get("ticket_id") == task_id
-            or data.get("jira_id") == task_id
-            or data.get("job_id") == task_id
+            data.get("task_id") in task_ids
+            or data.get("ticket_id") in task_ids
+            or data.get("jira_id") in task_ids
+            or data.get("job_id") in task_ids
         ):
             return data
     except (json.JSONDecodeError, TypeError):
@@ -100,10 +101,10 @@ def extract_json_block(text: str, task_id: str) -> dict | None:
         try:
             data = json.loads(json_match.group(1))
             if isinstance(data, dict) and (
-                data.get("task_id") == task_id
-                or data.get("ticket_id") == task_id
-                or data.get("jira_id") == task_id
-                or data.get("job_id") == task_id
+                data.get("task_id") in task_ids
+                or data.get("ticket_id") in task_ids
+                or data.get("jira_id") in task_ids
+                or data.get("job_id") in task_ids
             ):
                 return data
         except (json.JSONDecodeError, TypeError):
@@ -116,16 +117,17 @@ def extract_json_block(text: str, task_id: str) -> dict | None:
         if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
             data = json.loads(text[start_idx : end_idx + 1])
             if isinstance(data, dict) and (
-                data.get("task_id") == task_id
-                or data.get("ticket_id") == task_id
-                or data.get("jira_id") == task_id
-                or data.get("job_id") == task_id
+                data.get("task_id") in task_ids
+                or data.get("ticket_id") in task_ids
+                or data.get("jira_id") in task_ids
+                or data.get("job_id") in task_ids
             ):
                 return data
     except (json.JSONDecodeError, TypeError):
         pass
 
     return None
+
 
 
 # ---------------------------------------------------------------------------

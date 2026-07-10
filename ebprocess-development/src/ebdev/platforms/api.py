@@ -14,6 +14,8 @@ Responsibilities
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 import shutil
 from pathlib import Path
 
@@ -49,8 +51,6 @@ class ApiStrategy(PlatformStrategy):
         tuple[int, bytes, bytes]
             A tuple containing return code, stdout bytes, and stderr bytes.
         """
-        import os
-
         env = os.environ.copy()
         env["ESLINT_USE_FLAT_CONFIG"] = "false"
         proc = await asyncio.create_subprocess_exec(
@@ -111,34 +111,20 @@ class ApiStrategy(PlatformStrategy):
                 except Exception as e:
                     logger.warning("Failed to fix legacy eslint.config.js: %s", e)
 
-            # Node / NestJS
+            # Node / NestJS — install deps only; compilation runs during validate
             logger.info("Detected NestJS/Node project. Installing node modules...")
-            # Try npm install
-            returncode, _, stderr = await self._run_command(
+            returncode, stdout, stderr = await self._run_command(
                 ["npm", "install", "--legacy-peer-deps", "--engine-strict=false"], repo_path
             )
             if returncode != 0:
-                logger.warning("npm install failed: %s", stderr.decode().strip())
+                logger.debug(
+                    "npm install returned non-zero (may be a devDep/peer-dep warning). "
+                    "stderr: %s | stdout: %s",
+                    stderr.decode().strip(),
+                    stdout.decode().strip(),
+                )
             else:
-                # Compile/build the project to ensure everything is initialized and compile-checked
-                import json
-
-                try:
-                    with open(package_json, "r", encoding="utf-8") as f:
-                        pkg_data = json.load(f)
-                    scripts = pkg_data.get("scripts", {})
-                    if "build:all" in scripts:
-                        logger.info("NestJS project has build:all. Running npm run build:all...")
-                        rc, _, err = await self._run_command(["npm", "run", "build:all"], repo_path)
-                        if rc != 0:
-                            logger.warning("npm run build:all failed: %s", err.decode().strip())
-                    elif "build" in scripts:
-                        logger.info("NestJS project has build. Running npm run build...")
-                        rc, _, err = await self._run_command(["npm", "run", "build"], repo_path)
-                        if rc != 0:
-                            logger.warning("npm run build failed: %s", err.decode().strip())
-                except Exception as e:
-                    logger.warning("Failed to parse package.json or execute build scripts: %s", e)
+                logger.info("NestJS/Node dependencies installed successfully.")
         elif req_txt.exists():
             # Python requirements.txt
             logger.info("Detected Python (requirements.txt) project. Installing dependencies...")
@@ -214,8 +200,6 @@ class ApiStrategy(PlatformStrategy):
 
             # Test suite verification on NestJS if tests exist
             test_target = ""
-            import json
-
             try:
                 with open(package_json, "r", encoding="utf-8") as f:
                     pkg_data = json.load(f)

@@ -14,7 +14,6 @@ Responsibilities
 
 from __future__ import annotations
 
-import time
 from typing import TYPE_CHECKING
 
 from ebdev.config import config
@@ -22,11 +21,12 @@ from ebdev.core.exceptions import EpicStateError
 from ebdev.core.logger import get_logger
 from ebdev.core.nodes.common import send_progress
 from ebdev.models.graph_state import JobResult
-from ebdev.models.task import TaskArtifactState
+from ebdev.models.task import TaskArtifacts, TaskArtifactState, TaskStatus
 from ebdev.services.epic_state import get_epic_state_service
 
 if TYPE_CHECKING:
     from ebdev.models.graph_state import GraphState, JobContext
+    from ebdev.models.spoq import SPOQTask
 
 # ---------------------------------------------------------------------------
 # Module-level logger
@@ -41,10 +41,11 @@ logger = get_logger(__name__)
 
 async def _write_repair_state(
     ctx: "JobContext",
-    spoq_tasks: list,
+    spoq_tasks: "list[SPOQTask]",
     *,
     iteration: int,
     blocked: bool,
+    generated_artifacts: dict[str, dict[str, str]] | None = None,
 ) -> None:
     """
     Persist repair-iteration progress to ``state.json``.
@@ -59,6 +60,8 @@ async def _write_repair_state(
         The new repair iteration counter value.
     blocked:
         ``True`` when max iterations exceeded — sets task status to ``blocked``.
+    generated_artifacts:
+        Optional dictionary of generated artifacts from the GraphState to recover.
     """
     if not ctx.spoq_epic_dir:
         return
@@ -71,7 +74,9 @@ async def _write_repair_state(
     if not repair_task_ids:
         return
 
-    new_status = "blocked" if blocked else "repairing"
+    new_status: TaskStatus = "needs_review" if blocked else "repairing"
+    task_skills = {t.id: t.skills_required for t in spoq_tasks}
+
     try:
         snapshot = await svc.load_or_init(
             epic_id=ctx.spoq_epic_dir,
@@ -79,11 +84,47 @@ async def _write_repair_state(
         )
         for task_id in repair_task_ids:
             existing = snapshot.get_task(task_id)
+            
+            # Resolve platform
+            if existing:
+                platform = existing.platform
+            else:
+                skills = task_skills.get(task_id)
+                if skills:
+                    platform = skills[0]
+                elif "api" in task_id:
+                    platform = "api"
+                elif "flutter" in task_id:
+                    platform = "flutter"
+                elif "web" in task_id:
+                    platform = "web"
+                elif "cms" in task_id:
+                    platform = "cms"
+                else:
+                    platform = ctx.platform
+
+            # Resolve artifacts
+            art_from_state = None
+            if not existing and generated_artifacts and task_id in generated_artifacts:
+                art_from_state = generated_artifacts[task_id]
+
+            if existing:
+                updated_artifacts = existing.artifacts
+            elif art_from_state:
+                updated_artifacts = TaskArtifacts(
+                    contract=art_from_state.get("contract") or None,
+                    journal=art_from_state.get("journal") or None,
+                    schema_file=art_from_state.get("schema_file") or None,
+                    verification=art_from_state.get("verification") or None,
+                )
+            else:
+                updated_artifacts = TaskArtifacts()
+
             task_state = TaskArtifactState(
                 task_id=task_id,
-                platform=existing.platform if existing else ctx.platform,
+                platform=platform,
                 status=new_status,
-                artifacts=existing.artifacts if existing else None,
+                artifacts=updated_artifacts,
                 repair_iteration=iteration,
                 evaluation_avg=existing.evaluation_avg if existing else None,
                 evaluation_min=existing.evaluation_min if existing else None,
@@ -112,13 +153,12 @@ async def repair_node(state: GraphState) -> GraphState:
         The updated state with repair retry counters or job failure results.
     """
     state.last_node = "repair_agent"
-    iteration = state.context.repair_iteration + 1
+    ctx = state.context
+    assert ctx is not None, "repair_node requires a JobContext"
+    iteration = ctx.repair_iteration + 1
 
     msg = f"Repairing: Evaluating recovery iteration #{iteration}..."
     await send_progress(state, msg)
-    time.time()
-    ctx = state.context
-
     is_spoq = state.is_spoq
     if is_spoq:
         # Derive active platforms from current state tasks
@@ -164,8 +204,14 @@ async def repair_node(state: GraphState) -> GraphState:
                 state,
                 f"Max repair iterations reached. Job failed with platforms unresolved: {failed_plats}",
             )
-            # Mark all in-progress SPOQ tasks as blocked in the artifact registry.
-            await _write_repair_state(ctx, state.spoq_tasks, iteration=iteration, blocked=True)
+            # Mark all in-progress tasks as needs_review in the artifact registry.
+            await _write_repair_state(
+                ctx,
+                state.spoq_tasks,
+                iteration=iteration,
+                blocked=True,
+                generated_artifacts=state.generated_artifacts,
+            )
 
             updated_artifacts = {**state.generated_artifacts}
             if is_spoq:
@@ -174,9 +220,9 @@ async def repair_node(state: GraphState) -> GraphState:
                     existing = updated_artifacts.get(task_id, {})
                     updated_artifacts[task_id] = {
                         **existing,
-                        "status": "blocked",
+                        "status": "needs_review",
                         "repair_iteration": str(iteration),
-                    }
+                   }
 
             return state.model_copy(
                 update={
@@ -199,7 +245,13 @@ async def repair_node(state: GraphState) -> GraphState:
             f"Initiating repair retry iteration {iteration} for platforms: {failed_plats}...",
         )
         # Advance repair_iteration in the artifact registry.
-        await _write_repair_state(ctx, state.spoq_tasks, iteration=iteration, blocked=False)
+        await _write_repair_state(
+            ctx,
+            state.spoq_tasks,
+            iteration=iteration,
+            blocked=False,
+            generated_artifacts=state.generated_artifacts,
+        )
 
         updated_artifacts = {**state.generated_artifacts}
         if is_spoq:

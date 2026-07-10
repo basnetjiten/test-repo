@@ -96,14 +96,14 @@ class Status:
     """Common status values for task lifecycle, job results, and execution."""
 
     # Task lifecycle (TaskStatus Literal in schemas.py)
-    PLANNED = "planned"
+    PENDING_PLAN = "pending_plan"
+    PLANNING = "planning"
+    PENDING_BUILD = "pending_build"
     BUILDING = "building"
-    BUILT = "built"
     EVALUATING = "evaluating"
-    EVALUATE_FAILED = "evaluate_failed"
     REPAIRING = "repairing"
     PASSED = "passed"
-    BLOCKED = "blocked"
+    NEEDS_REVIEW = "needs_review"
 
     # SPOQ task statuses
     PENDING = "pending"

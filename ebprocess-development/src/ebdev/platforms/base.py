@@ -62,3 +62,16 @@ class PlatformStrategy(ABC):
             The type of starter skeleton to bootstrap.
         """
         pass
+
+    async def post_prepare(self, repo_path: Path, new_name: str) -> None:
+        """
+        Optional post-prepare customization hook for refactoring/renaming projects.
+
+        Parameters
+        ----------
+        repo_path : Path
+            The repository path.
+        new_name : str
+            The target package/directory name.
+        """
+        pass

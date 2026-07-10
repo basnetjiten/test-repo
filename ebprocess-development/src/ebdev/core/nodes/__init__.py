@@ -4,12 +4,12 @@
 from ebdev.core.nodes.contract import contract_node
 from ebdev.core.nodes.finalize import finalize_node
 from ebdev.core.nodes.generate import generate_node
-from ebdev.core.nodes.orchestrate import orchestrate_node
 from ebdev.core.nodes.plan import plan_node
 from ebdev.core.nodes.preflight import preflight_node
 from ebdev.core.nodes.prepare import prepare_node
 from ebdev.core.nodes.publish import publish_node
 from ebdev.core.nodes.repair import repair_node
+from ebdev.core.nodes.strategize import orchestrate_node
 from ebdev.core.nodes.validate import validate_node
 
 __all__ = [

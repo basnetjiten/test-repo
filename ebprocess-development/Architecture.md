@@ -408,7 +408,7 @@ The LangGraph checkpoint (Postgres) is the authoritative source of pipeline posi
     "contract-41831": {
       "task_id": "contract-41831",
       "platform": "api",
-      "status": "evaluate_failed",
+      "status": "repairing",
       "artifacts": {
         "contract": ".ebpearls/Epic-44445/contract-41831.md",
         "journal": ".ebpearls/Epic-44445/journals/contract-41831.evaluation.md",
@@ -428,33 +428,34 @@ The LangGraph checkpoint (Postgres) is the authoritative source of pipeline posi
 #### Task Status Lifecycle
 
 ```
-planned → building → built → evaluating → passed
-                                        ↓
-                              evaluate_failed → repairing → evaluating (loop, max 3)
-                                                          → blocked (after 3 failures)
+pending_plan → planning → pending_build → building → evaluating → passed
+                                                                ↓
+                                                     repairing ← (on failure)
+                                                         ↓
+                                                    needs_review (max retries)
 ```
 
 | Status | Meaning | Agent Resume Action |
 |---|---|---|
-| `planned` | Not yet started | Full planner dispatch |
-| `building` | Builder crashed mid-run | Re-dispatch builder |
-| `built` | Plan file exists, build not yet started | Skip planner; dispatch builder |
-| `evaluating` | Evaluator crashed mid-run | Re-dispatch evaluator |
-| `evaluate_failed` | Evaluation scored below threshold | Load journal `## Remediation`; repair build |
+| `pending_plan` | Not yet started | Full planner dispatch |
+| `planning` | Planner running/crashed | Re-dispatch planner |
+| `pending_build` | Plan file exists, build not yet started | Skip planner; dispatch builder |
+| `building` | Builder running/crashed | Re-dispatch builder |
+| `evaluating` | Evaluator running/crashed | Re-dispatch evaluator |
 | `repairing` | Repair in progress / crashed | Continue repair from journal |
 | `passed` | All metrics passed | Skip entirely |
-| `blocked` | Max repair iterations exceeded | Flag for human review |
+| `needs_review` | Max repair iterations exceeded or plan failed | Flag for human review |
 
 #### Write Responsibilities per Node
 
 | Pipeline Node | When it writes | What it sets |
 |---|---|---|
-| `plan_node` | After plan file verified on disk | `status = built`, `artifacts.contract` |
-| `plan_node` (skip) | Idempotency skip (file already exists) | `status = built`, `artifacts.contract` |
+| `plan_node` | After plan file verified on disk | `status = pending_build`, `artifacts.contract` |
+| `plan_node` (skip) | Idempotency skip (file already exists) | `status = pending_build`, `artifacts.contract` |
 | `validate_node` (pass) | After SPOQ tasks marked completed | `status = passed`, `artifacts.journal` |
-| `validate_node` (fail) | After platform errors aggregated | `status = evaluate_failed`, `artifacts.journal` |
+| `validate_node` (fail) | After platform errors aggregated | `status = repairing`, `artifacts.journal` |
 | `repair_node` | Each repair iteration | `status = repairing`, `repair_iteration` |
-| `repair_node` (blocked) | When `repair_iteration ≥ MAX_REPAIR_ITERATIONS` | `status = blocked` |
+| `repair_node` (blocked) | When `repair_iteration ≥ MAX_REPAIR_ITERATIONS` | `status = needs_review` |
 
 #### Decentralized Node Idempotency Rules
 
@@ -462,8 +463,8 @@ Instead of having agents check `state.json` on disk, the Python graph nodes hand
 
 - **`plan_node`**: Checks if `state.generated_artifacts[task_id].contract` is populated. If yes, it skips planner execution and immediately returns success.
 - **`generate_node`**: Checks if `state.generated_artifacts[task_id].journal` points to a validation failure journal. If yes, it extracts the remediation details from the journal file and injects them directly into the agent's `shared_context["repair_journal"]` parameter.
-- **`validate_node`**: Records the validation status (`passed` or `evaluate_failed`) and the evaluation journal path inside `state.generated_artifacts`.
-- **`repair_node`**: Updates iteration counts and records blocked status inside `state.generated_artifacts`.
+- **`validate_node`**: Records the validation status (`passed` or `repairing`) and the evaluation journal path inside `state.generated_artifacts`.
+- **`repair_node`**: Updates iteration counts and records `needs_review` status inside `state.generated_artifacts`.
 
 Because `state.generated_artifacts` is a dictionary field on `GraphState`, it is automatically persisted in the Postgres database checkpoints. Even when LangGraph resumes from any intermediate state, the nodes remain completely skip-aware and self-correcting.
 
@@ -525,7 +526,7 @@ The `orchestrate_node` parses ticket properties to choose an `OrchestrationStrat
 > **Dual Orchestration & Payload Bypass**:
 > - The `orchestrate_node` dispatches to OpenCode's `multi_agent_orchestrator` only for the initial complexity and execution mode classification (using a single-turn prompt), not to manage the step-by-step SPOQ lifecycle.
 > - The actual wave topological sorting, dispatch scheduling, retry/repair counts, and node transitions are driven entirely by the Python LangGraph code.
-> - If the incoming request payload contains a predefined list of tasks (`tasks[]` is present, e.g. in `dummy_request.json`), the LLM orchestrator classification is completely bypassed. The execution mode is automatically set to `spoq`.
+> - If the incoming request payload contains a predefined list of tasks (`tasks[]` is present, e.g. in `task_planning.json`), the LLM orchestrator classification is completely bypassed. The execution mode is automatically set to `spoq`.
 
 ### `OrchestrationStrategy` Schema
 
@@ -592,7 +593,7 @@ Each epic occupies its own directory under `.ebpearls/`:
     journals/                   ← Agent session journals
 ```
 
-### Concrete Task DAG Example (from dummy_request.json)
+### Concrete Task DAG Example (from task_planning.json)
 
 For ticket `Epic-44445` containing platform configurations, the tasks are decomposed topologically into distinct waves:
 
@@ -888,7 +889,7 @@ sequenceDiagram
     participant OpenCode as OpenCode Server (Port 4096)
     participant Workspace as Isolated Workspace
 
-    User->>FastAPI: POST /execute (dummy_request.json)
+    User->>FastAPI: POST /execute (task_planning.json)
     FastAPI->>Graph: Initialize state & trigger execution graph
 
     %% prepare phase
@@ -1024,7 +1025,7 @@ sequenceDiagram
 ├── .env                              ← Local environment configuration file
 │
 ├── test/
-│   ├── dummy_request.json            ← Sample API execution payload
+│   ├── task_planning.json            ← Sample API execution payload
 │   ├── test_pipeline.py              ← Concurrent pipeline simulation dry run
 │   └── test_opencode_api.py          ← OpenCode bridge path isolation verification
 │

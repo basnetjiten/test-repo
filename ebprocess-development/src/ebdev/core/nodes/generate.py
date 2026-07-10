@@ -63,6 +63,7 @@ async def generate_node(state: GraphState) -> GraphState:
     start_time = time.time()
 
     ctx = state.context
+    assert ctx is not None, "generate_node requires a JobContext"
     is_spoq = state.is_spoq
     if is_spoq:
         tasks = get_state_active_tasks(state.spoq_tasks)
@@ -208,6 +209,19 @@ async def generate_node(state: GraphState) -> GraphState:
             if not existing_session_id and ticket_id:
                 existing_session_id = await db.get_session_id_by_jira_id(f"{ticket_id}_{platform}")
 
+        # Guard: reject stale or mock session IDs that do not conform to the
+        # OpenCode session ID format (must start with "ses"). Such values may
+        # have been written to the DB by a previous test run and would cause
+        # a 500 error when sent to the real OpenCode server.
+        if existing_session_id and not existing_session_id.startswith("ses"):
+            logger.warning(
+                "[%s] Discarding invalid/stale session ID %r (does not start with 'ses'). "
+                "A fresh session will be created.",
+                platform,
+                existing_session_id,
+            )
+            existing_session_id = None
+
         if existing_session_id:
             logger.info(
                 "[%s] Resuming OpenCode session: %s",
@@ -217,7 +231,7 @@ async def generate_node(state: GraphState) -> GraphState:
 
         loop = asyncio.get_running_loop()
 
-        def _on_opencode_progress(msg: str):
+        def _on_opencode_progress(msg: str) -> None:
             asyncio.run_coroutine_threadsafe(send_progress(state, f"[{platform}] Builder: {msg}"), loop)
 
         result, captured_session_id = await asyncio.to_thread(
@@ -240,8 +254,8 @@ async def generate_node(state: GraphState) -> GraphState:
     try:
         runs = await asyncio.gather(*[generate_single_task_platform(t, p) for t, p in tasks_to_generate])
 
-        for t, p, res, sid in runs:
-            key = f"{t}_{p}" if t else p
+        for task_id, p, res, sid in runs:
+            key = f"{task_id}_{p}" if task_id else p
             results[key] = res
             if sid:
                 session_ids[p] = sid

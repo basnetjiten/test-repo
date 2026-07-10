@@ -63,11 +63,15 @@ class JobContext(BaseModel):
         default_factory=lambda: {
             "api": config.STARTERKIT_API_PATH,
             "flutter": config.STARTERKIT_FLUTTER_PATH,
+            "cms": config.STARTERKIT_CMS_PATH,
+            "web": config.STARTERKIT_WEB_PATH,
         }
     )
     starter_type: Optional[str] = None
-    # Per-platform scaffold types. e.g. {"api": "nestjs", "flutter": "flutter"}
-    starter_types: Dict[str, str] = Field(default_factory=lambda: {"api": "nestjs", "flutter": "flutter"})
+    # Per-platform scaffold types.
+    starter_types: Dict[str, str] = Field(
+        default_factory=lambda: {"api": "nestjs", "flutter": "flutter", "cms": "react", "web": "nextjs"}
+    )
     n8n_callback_url: Optional[str] = None
     linked_ticket_ids: List[str] = Field(default_factory=list)
 
@@ -167,6 +171,8 @@ class JobContext(BaseModel):
             return f"{self.space_name}-services"
         if platform == "flutter":
             return f"{proj_name}_flutter"
+        if platform == "cms":
+            return f"{self.space_name}-cms"
         if platform == "web":
             return f"{self.space_name}-web"
         return f"{proj_name}_{platform}"
@@ -177,6 +183,48 @@ class JobContext(BaseModel):
         if len(self.platforms) > 1:
             return base_path / self.platform_dir_name(platform)
         return base_path
+
+
+# ---------------------------------------------------------------------------
+# Platform Context Slice Schema
+# ---------------------------------------------------------------------------
+class PlatformContextSlice(BaseModel):
+    """
+    Per-platform context slice written alongside the shared EpicManifest.
+
+    This is the Pydantic schema for ``context_{platform}.json``.  It holds
+    only the fields that are unique to a specific platform agent invocation
+    — the shared epic data lives in ``context.json`` (EpicManifest).
+
+    Attributes
+    ----------
+    platform:
+        Target platform key (``"flutter"``, ``"api"``, ``"web"``, ``"cms"``).
+    repo_path:
+        Container-resolved absolute path to the platform repository root.
+    active_task_id:
+        The SPOQ task ID currently being built (e.g. ``"contract-276041"``).
+    current_agent:
+        Active agent role (``"plan"``, ``"build"``, ``"bug_fixer"``...).
+    mocking_level:
+        Frontend mocking strategy (``"live"`` | ``"mock_repositories"`` | ``"ui_stubs"``).
+    offline_first:
+        Whether the platform requires offline-first architecture.
+    task_contexts:
+        Filtered view of ``shared_context.task_contexts`` — contains **only**
+        tasks assigned to this platform.
+    validation_errors:
+        List of validation error messages accumulated during repair cycles.
+    """
+
+    platform: str
+    repo_path: str
+    active_task_id: Optional[str] = None
+    current_agent: str = "build"
+    mocking_level: str = "live"
+    offline_first: bool = False
+    task_contexts: Dict[str, Any] = Field(default_factory=dict)
+    validation_errors: List[str] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -230,6 +278,7 @@ class JobResult(BaseModel):
 
     task_id: str
     ticket_id: str
+    space_name: Optional[str] = None
     status: str  # "success" | "failed" | "partial"
     summary: Optional[str] = None
     warnings: List[str] = Field(default_factory=list)
@@ -286,6 +335,9 @@ class OrchestrationStrategy(BaseModel):
     max_repair_iterations: int = 3
     reasoning: str = ""
     stages: Optional[List[List[str]]] = None
+    endpoints: List[Dict[str, Any]] = Field(default_factory=list)
+    task_contexts: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+    primary_feature_name: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -299,7 +351,7 @@ class GraphState(BaseModel):
     and OpenCode session IDs for resumable builds.
     """
 
-    context: JobContext
+    context: Optional[JobContext] = None
     strategy: Optional[OrchestrationStrategy] = None
     current_stage: int = 0
     plan_path: Optional[str] = None

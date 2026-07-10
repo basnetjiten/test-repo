@@ -51,6 +51,7 @@ async def finalize_node(state: GraphState) -> GraphState:
     state.last_node = "finalize_agent"
     start_time = time.time()
     ctx = state.context
+    assert ctx is not None, "finalize_node requires a JobContext"
     callback_url = ctx.n8n_callback_url
 
     logger.info("Finishing job: %s", ctx.ticket_id)

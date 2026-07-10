@@ -14,14 +14,14 @@ from pydantic import BaseModel, Field
 
 #: All valid task lifecycle statuses in the SPOQ pipeline.
 TaskStatus = Literal[
-    "planned",
+    "pending_plan",
+    "planning",
+    "pending_build",
     "building",
-    "built",
     "evaluating",
-    "evaluate_failed",
     "repairing",
     "passed",
-    "blocked",
+    "needs_review",
 ]
 
 
@@ -56,7 +56,7 @@ class TaskArtifactState(BaseModel):
     platform: str
     """Target platform for this task (``api`` | ``flutter`` | ``web``)."""
 
-    status: TaskStatus = "planned"
+    status: TaskStatus = "pending_plan"
     """Current lifecycle phase of the task."""
 
     artifacts: TaskArtifacts = Field(default_factory=TaskArtifacts)
@@ -77,12 +77,12 @@ class TaskArtifactState(BaseModel):
     @property
     def is_terminal(self) -> bool:
         """Return True when the task reached a non-retryable terminal state."""
-        return self.status in ("passed", "blocked")
+        return self.status in ("passed", "needs_review")
 
     @property
     def needs_repair(self) -> bool:
         """Return True when the task failed evaluation and repair is warranted."""
-        return self.status == "evaluate_failed"
+        return self.status == "repairing"
 
 
 class EpicStateSnapshot(BaseModel):
@@ -114,8 +114,7 @@ class EpicStateSnapshot(BaseModel):
 
     def get_task(self, task_id: str) -> Optional[TaskArtifactState]:
         """Return the state for *task_id*, or ``None`` if not yet registered."""
-        tasks: Dict[str, TaskArtifactState] = self.tasks  # pylint: disable=no-member
-        return tasks.get(task_id)
+        return self.tasks.get(task_id)  # pylint: disable=no-member
 
     def upsert_task(self, task_state: TaskArtifactState) -> "EpicStateSnapshot":
         """
@@ -123,8 +122,8 @@ class EpicStateSnapshot(BaseModel):
 
         Uses immutable copy semantics to stay consistent with Pydantic v2 patterns.
         """
-        tasks: Dict[str, TaskArtifactState] = self.tasks  # pylint: disable=no-member
-        updated_tasks = {**tasks, task_state.task_id: task_state}
+        updated_tasks = {**self.tasks, task_state.task_id: task_state}  # pylint: disable=not-a-mapping
+
         return self.model_copy(
             update={
                 "tasks": updated_tasks,
@@ -134,8 +133,7 @@ class EpicStateSnapshot(BaseModel):
 
     def pending_tasks(self) -> List[TaskArtifactState]:
         """Return all tasks not yet in a terminal state, sorted by task_id."""
-        tasks: Dict[str, TaskArtifactState] = self.tasks  # pylint: disable=no-member
         return sorted(
-            [t for t in tasks.values() if not t.is_terminal],
+            [t for t in self.tasks.values() if not t.is_terminal],  # pylint: disable=no-member
             key=lambda t: t.task_id,
         )

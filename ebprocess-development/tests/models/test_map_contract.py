@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from ebdev.core.spoq_map import build_epic_tasks, compute_epic_waves
 from ebdev.models.spoq import SPOQMapEpic
-from ebdev.models.ticket import EpicTask
+from ebdev.models.ticket import EpicTask, EpicTaskHour, EpicTaskPlatform
 
 
 def main() -> None:
@@ -41,18 +41,18 @@ def main() -> None:
         name="Test Task",
         status="todo",
         hours=[
-            {
-                "estimatedHour": 1.0,
-                "taskId": 101,
-                "platformId": 1,
-                "platform": {"id": 1, "name": "api"},
-            },
-            {
-                "estimatedHour": 1.0,
-                "taskId": 101,
-                "platformId": 2,
-                "platform": {"id": 2, "name": "flutter"},
-            },
+            EpicTaskHour(
+                estimatedHour=1.0,
+                taskId=101,
+                platformId=1,
+                platform=EpicTaskPlatform(id=1, name="api"),
+            ),
+            EpicTaskHour(
+                estimatedHour=1.0,
+                taskId=101,
+                platformId=2,
+                platform=EpicTaskPlatform(id=2, name="flutter"),
+            ),
         ],
     )
 

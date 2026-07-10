@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import inspect
+
 from ebdev.config import config
 from ebdev.core.logger import get_logger
 
@@ -56,7 +58,7 @@ async def cleanup_thread(thread_id: str) -> bool:
 
     # Lazy import to avoid circular dependency (graph imports nodes,
     # nodes import services, services should not import graph at top level)
-    from ebdev.core.graph import graph as compiled_graph
+    from ebdev.core.graph import graph as compiled_graph  # noqa: PLC0415
 
     checkpointer = getattr(compiled_graph, "checkpointer", None)
     if checkpointer is None:
@@ -106,7 +108,7 @@ async def get_thread_history(
         List of checkpoint metadata dicts with ``checkpoint_id``,
         ``step``, ``source``, ``created_at``, and ``next_nodes``.
     """
-    from ebdev.core.graph import graph as compiled_graph
+    from ebdev.core.graph import graph as compiled_graph  # noqa: PLC0415
 
     checkpointer = getattr(compiled_graph, "checkpointer", None)
     if checkpointer is None or not hasattr(checkpointer, "alist"):
@@ -116,8 +118,6 @@ async def get_thread_history(
     history: list[dict[str, Any]] = []
 
     try:
-        import inspect
-
         res = checkpointer.alist(thread_config, limit=limit)
         results = await res if inspect.isawaitable(res) else res
         async for checkpoint_tuple in results:

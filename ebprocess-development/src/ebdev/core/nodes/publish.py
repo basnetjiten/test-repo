@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -27,7 +27,7 @@ from ebdev.models.graph_state import JobResult
 from ebdev.services.git import GitConflictError, GitService
 
 if TYPE_CHECKING:
-    from ebdev.models.graph_state import GraphState
+    from ebdev.models.graph_state import GraphState, JobContext
 
 # ---------------------------------------------------------------------------
 # Module-level logger
@@ -67,6 +67,7 @@ async def publish_node(state: GraphState) -> GraphState:
     await send_progress(state, "Publishing changes and creating Pull Requests concurrently...")
 
     ctx = state.context
+    assert ctx is not None, "publish_node requires a JobContext"
     platforms = ctx.platforms
     Path(ctx.repo_path)
     branch_name = ctx.generated_branch or ctx.branch
@@ -167,7 +168,9 @@ async def publish_node(state: GraphState) -> GraphState:
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
-def _create_bitbucket_pr(ctx, branch_name: str, repo_url: str | None = None) -> str | None:
+def _create_bitbucket_pr(
+    ctx: "JobContext", branch_name: str, repo_url: str | None = None
+) -> str | None:
     """
     Invoke Bitbucket API to create a PR.
 
@@ -225,13 +228,19 @@ def _create_bitbucket_pr(ctx, branch_name: str, repo_url: str | None = None) -> 
             if response.status_code == 409:
                 return None
             response.raise_for_status()
-            return response.json().get("links", {}).get("html", {}).get("href")
+            result: dict[str, Any] = response.json()
+            links: dict[str, Any] = result.get("links", {})
+            html: dict[str, Any] = links.get("html", {})
+            href: str | None = html.get("href")
+        return href
     except httpx.HTTPError as e:
         logger.error("Failed to create Bitbucket PR: %s", e)
         return None
 
 
-def _create_github_pr(ctx, branch_name: str, repo_url: str | None = None) -> str | None:
+def _create_github_pr(
+    ctx: "JobContext", branch_name: str, repo_url: str | None = None
+) -> str | None:
     """
     Invoke GitHub API to create a PR.
 
@@ -250,9 +259,8 @@ def _create_github_pr(ctx, branch_name: str, repo_url: str | None = None) -> str
         The HTML URL of the created PR, or None if creation failed or skipped.
     """
     if not repo_url:
-        repo_url = (
-            ctx.project_repo or config.GITHUB_REPO_URL if hasattr(config, "GITHUB_REPO_URL") else ctx.project_repo
-        )
+        github_repo_url: str | None = getattr(config, "GITHUB_REPO_URL", None)
+        repo_url = ctx.project_repo or github_repo_url
     if not repo_url:
         return None
 
@@ -285,7 +293,8 @@ def _create_github_pr(ctx, branch_name: str, repo_url: str | None = None) -> str
                 logger.info("GitHub PR already exists.")
                 return None
             response.raise_for_status()
-            return response.json().get("html_url")
+            result_data: dict[str, Any] = response.json()
+            return result_data.get("html_url")
     except httpx.HTTPError as e:
         logger.error("Failed to create GitHub PR: %s", e)
         return None

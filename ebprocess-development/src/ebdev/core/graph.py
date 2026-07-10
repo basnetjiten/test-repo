@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import contextlib
 import os
 import sys
 from typing import TYPE_CHECKING, Any, Iterator, override
@@ -25,6 +26,7 @@ import psycopg
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.graph import END, StateGraph
 from psycopg_pool import AsyncConnectionPool
 
@@ -42,7 +44,16 @@ from ebdev.core.nodes import (
     repair_node,
     validate_node,
 )
-from ebdev.models.graph_state import GraphState
+from ebdev.models.graph_state import GraphState, JobContext, JobResult, OrchestrationStrategy
+from ebdev.models.spoq import SPOQTask
+
+allowed_msgpack_modules = [
+    JobContext,
+    JobResult,
+    OrchestrationStrategy,
+    SPOQTask
+]
+custom_serde = JsonPlusSerializer(allowed_msgpack_modules=allowed_msgpack_modules)
 
 if TYPE_CHECKING:
     from typing import AsyncIterator, Sequence
@@ -102,20 +113,52 @@ class ResilientPostgresSaver(BaseCheckpointSaver):
     _saver: AsyncPostgresSaver | None
     _pool: AsyncConnectionPool[psycopg.AsyncConnection[dict[str, Any]]]
     _max_retries: int
+    _loop: asyncio.AbstractEventLoop | None
+    _background_tasks: set[asyncio.Task[Any]]
 
     def __init__(
         self,
         pool: AsyncConnectionPool[psycopg.AsyncConnection[dict[str, Any]]],
         max_retries: int = 3,
+        *,
+        serde: Any = None,
     ) -> None:
-        super().__init__()
+        super().__init__(serde=serde)
         self._saver = None
         self._pool = pool
         self._max_retries = max_retries
+        self._background_tasks = set()
+        try:
+            self._loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._loop = None
 
     async def _get_saver(self) -> AsyncPostgresSaver:
-        if self._saver is None:
-            self._saver = AsyncPostgresSaver(self._pool)
+        current_loop = asyncio.get_running_loop()
+        if self._saver is None or self._loop is not current_loop:
+            if self._loop is not None and self._loop is not current_loop:
+                logger.info("Event loop changed. Recreating psycopg connection pool.")
+                # Close the old pool in a background task so any CancelledError on the dead loop
+                # does not propagate and abort the current request.
+                async def _safe_close(old_pool: AsyncConnectionPool[Any]) -> None:
+                    with contextlib.suppress(BaseException):
+                        await old_pool.close()
+                task = asyncio.create_task(_safe_close(self._pool))
+                self._background_tasks.add(task)
+                task.add_done_callback(self._background_tasks.discard)
+                self._pool = AsyncConnectionPool(
+                    conninfo=self._pool.conninfo,
+                    min_size=self._pool.min_size,
+                    max_size=self._pool.max_size,
+                    max_lifetime=self._pool.max_lifetime,
+                    max_idle=self._pool.max_idle,
+                    kwargs=self._pool.kwargs or {},
+                    open=False,
+                )
+            self._loop = current_loop
+            if not getattr(self._pool, "_opened", False):
+                await self._pool.open()
+            self._saver = AsyncPostgresSaver(self._pool, serde=self.serde)
         return self._saver
 
     async def _retry(self, coro_factory: Any) -> Any:
@@ -133,7 +176,7 @@ class ResilientPostgresSaver(BaseCheckpointSaver):
                 if attempt == self._max_retries - 1:
                     raise
                 await asyncio.sleep(2**attempt)
-
+        raise RuntimeError("Unreachable")
     # ------------------------------------------------------------------
     # Async interface — primary surface used by LangGraph
     # ------------------------------------------------------------------
@@ -173,7 +216,7 @@ class ResilientPostgresSaver(BaseCheckpointSaver):
         self,
         config: RunnableConfig | None,
         *,
-        filter: dict[str, Any] | None = None,  # noqa: A002
+        filter: dict[str, Any] | None = None,
         before: RunnableConfig | None = None,
         limit: int | None = None,
     ) -> AsyncIterator[CheckpointTuple]:  # type: ignore[override]
@@ -258,7 +301,7 @@ class ResilientPostgresSaver(BaseCheckpointSaver):
         self,
         config: RunnableConfig | None,
         *,
-        filter: dict[str, Any] | None = None,  # noqa: A002
+        filter: dict[str, Any] | None = None,
         before: RunnableConfig | None = None,
         limit: int | None = None,
     ) -> Iterator[CheckpointTuple]:
@@ -422,7 +465,7 @@ def _route_after_validate(state: GraphState) -> str:
         return "publish_agent" if state.done else "planner_agent"
 
     # Backward compatibility for parallel/sequential without SPOQ
-    active_platforms = state.context.platforms
+    active_platforms = state.context.platforms if state.context else []
     has_failures = any(state.failed_platforms.get(p) for p in active_platforms)
 
     if has_failures:
@@ -631,10 +674,10 @@ def build_graph() -> CompiledStateGraph:
                 )
                 await pool.open()
                 try:
-                    saver = AsyncPostgresSaver(pool)
+                    saver = AsyncPostgresSaver(pool, serde=custom_serde)
                     await saver.setup()
                     logger.info("LangGraph graph compiled with AsyncPostgresSaver checkpointer.")
-                    return builder.compile(checkpointer=ResilientPostgresSaver(pool))
+                    return builder.compile(checkpointer=ResilientPostgresSaver(pool, serde=custom_serde))
                 except Exception:
                     await pool.close()
                     raise
@@ -655,9 +698,9 @@ def build_graph() -> CompiledStateGraph:
             logger.warning(
                 "Postgres database is unreachable or failed to initialize: %s. Falling back to MemorySaver.", e
             )
-            return builder.compile(checkpointer=MemorySaver())
+            return builder.compile(checkpointer=MemorySaver(serde=custom_serde))
     else:
-        return builder.compile(checkpointer=MemorySaver())
+        return builder.compile(checkpointer=MemorySaver(serde=custom_serde))
 
 
 # Module-level compiled graph — required by langgraph.json

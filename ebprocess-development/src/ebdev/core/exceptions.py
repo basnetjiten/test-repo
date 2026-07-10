@@ -26,3 +26,7 @@ class UnsupportedPlatformError(PlatformStrategyError, ValueError):
 
 class EpicStateError(EbDevError):
     """Raised when reading or writing the .ebpearls/Epic-{id}/state.json artifact registry fails."""
+
+
+class OrchestrationError(EbDevError):
+    """Raised when the dynamic orchestration strategy generation fails or is invalid."""

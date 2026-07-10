@@ -1,8 +1,17 @@
 # -*- coding: utf-8 -*-
 """
-service.py
-==========
-Orchestration service coordinating execution context, prompts and deepagent APIs.
+orchestrator.py
+===============
+OpenCode agent orchestration service.
+
+Coordinates the full lifecycle of an OpenCode deepagent invocation:
+  - Session creation and resumption
+  - Server-Sent Events (SSE) streaming
+  - Prompt dispatch and response parsing
+  - Context file delegation (via EpicContextWriter)
+
+Backward-compatibility wrappers (``invoke_opencode``, ``write_context``) are
+exported at the bottom for callers that reference the old function signatures.
 """
 
 from __future__ import annotations
@@ -25,9 +34,9 @@ from ebdev.services import prompts
 from ebdev.services.opencode.client import (
     DEFAULT_OPENCODE_SERVER_URL,
     OpenCodeAPIClient,
-    extract_figma_url,
     extract_json_block,
 )
+from ebdev.services.opencode.context_writer import EpicContextWriter
 from ebdev.services.prompts import to_container_path
 
 if TYPE_CHECKING:
@@ -48,73 +57,44 @@ class OpenCodeService:
     @staticmethod
     def write_context(job_context: JobContext, storage_dir: Path, platform: str = "") -> Path:
         """
-        Serialize JobContext to a platform-prefixed context JSON descriptor in storage_dir/tasks/.
+        Write the two-tier context files for *job_context*.
+
+        Delegates to :class:`~ebdev.services.opencode.context_writer.EpicContextWriter`
+        which implements:
+
+        - **Tier 1** — shared ``context.json`` (EpicManifest), written once
+          per epic with SHA-256 content-hash idempotency.
+        - **Tier 2** — lean ``context_{platform}.json`` (PlatformSlice),
+          containing only this platform's delta fields and filtered
+          ``task_contexts``.
+
+        Works for both SPOQ and non-SPOQ execution modes.
 
         Parameters
         ----------
-        job_context : JobContext
-            The job configuration context schemas.
-        storage_dir : Path
-            The central .opencode storage directory.
-        platform : str
-            The platform identifier used to prefix the context filename.
+        job_context:
+            The full pipeline job context.
+        storage_dir:
+            Root storage directory (e.g. ``.ebpearls/``).
+        platform:
+            Target platform key.  When provided, the platform slice is written
+            in addition to the manifest.
 
         Returns
         -------
         Path
-            The path of the written JSON context file.
+            Path to the platform slice when *platform* is given; otherwise the
+            manifest path.
         """
-        if not job_context.ticket.figma_url:
-            url = extract_figma_url(job_context.ticket.description)
-            if url:
-                job_context.ticket.figma_url = url
 
-        task_id_str = str(job_context.task_id) if getattr(job_context, "task_id", None) else "default"
-        if "-" in task_id_str:
-            parts = task_id_str.rsplit("-", 1)
-            if len(parts) == 2 and parts[1].isdigit():
-                phase_prefix = parts[0]
-                jira_id = parts[1]
-                task_id_dir = jira_id
-                file_prefix = f"{phase_prefix}_"
-            else:
-                task_id_dir = task_id_str
-                file_prefix = ""
-        else:
-            task_id_dir = task_id_str
-            file_prefix = ""
-
-        if job_context.spoq_epic_dir:
-            # SPOQ mode: store context in project storage under an epic-specific subdirectory
-            epic_safe = job_context.spoq_epic_dir.replace("/", "_").replace("\\", "_")
-            epic_dir = storage_dir / epic_safe
-            epic_dir.mkdir(parents=True, exist_ok=True)
-            filename = f"context_{platform}.json" if platform else "context.json"
-            ctx_file = epic_dir / filename
-        else:
-            # Fallback/Legacy mode
-            plans_dir = storage_dir / task_id_dir
-            plans_dir.mkdir(parents=True, exist_ok=True)
-            filename = f"{file_prefix}context_{platform}.json" if platform else f"{file_prefix}context.json"
-            ctx_file = plans_dir / filename
-
-        serializable_context = job_context.model_copy(
-            update={
-                "repo_path": str(to_container_path(Path(job_context.repo_path))),
-                "spoq_epic_dir": str(to_container_path(Path(job_context.spoq_epic_dir)))
-                if job_context.spoq_epic_dir
-                else None,
-            }
-        )
-        ctx_file.write_text(serializable_context.model_dump_json(indent=2, exclude_none=True), encoding="utf-8")
-        return ctx_file
+        return EpicContextWriter().write_context(job_context, storage_dir, platform=platform)
 
     @staticmethod
     def _resolve_agent(job_context: JobContext) -> str:
         """Resolve generic platform task intent to specific agent identifier keys."""
         phase_map = {
             "flutter": {"plan": Agents.FLUTTER_PLANNER, "build": Agents.FLUTTER_BUILDER},
-            "api": {"plan": Agents.API_PLANNER, "build":Agents.API_BUILDER},
+            "api": {"plan": Agents.API_PLANNER, "build": Agents.API_BUILDER},
             "web": {"plan": Agents.WEB_PLANNER, "build": Agents.WEB_BUILDER},
             "cms": {"plan": Agents.CMS_PLANNER, "build": Agents.CMS_BUILDER},
         }
@@ -270,7 +250,11 @@ class OpenCodeService:
         reply_text = "".join(p.get("text", "") for p in parts if p.get("type") == "text")
 
         logger.info("Agent execution complete on session: %s", session_id)
-        data = extract_json_block(reply_text, job_context.ticket_id)
+        target_ids = [job_context.ticket_id]
+        if job_context.active_task_id:
+            target_ids.append(job_context.active_task_id)
+
+        data = extract_json_block(reply_text, target_ids)
 
         if data:
             try:

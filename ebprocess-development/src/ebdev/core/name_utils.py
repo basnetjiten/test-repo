@@ -33,7 +33,7 @@ from typing import Collection, Optional
 # FeatureNameExtractor and override them.
 
 #: Verbs commonly used in ticket / task titles that carry no domain meaning.
-GENERIC_VERBS: Collection[str] = frozenset(
+GENERIC_VERBS: frozenset[str] = frozenset(
     {
         "create",
         "add",
@@ -66,7 +66,7 @@ GENERIC_VERBS: Collection[str] = frozenset(
 )
 
 #: Generic nouns that describe the *type* of work rather than the domain.
-GENERIC_NOUNS: Collection[str] = frozenset(
+GENERIC_NOUNS: frozenset[str] = frozenset(
     {
         "feature",
         "screen",
@@ -103,7 +103,7 @@ GENERIC_NOUNS: Collection[str] = frozenset(
 #: UI / presentation terms — stripped only when the task also targets a
 #: backend platform; kept when the task is UI-only so they can form part of
 #: the feature name.
-UI_TERMS: Collection[str] = frozenset(
+UI_TERMS: frozenset[str] = frozenset(
     {
         "widget",
         "card",
@@ -126,7 +126,7 @@ UI_TERMS: Collection[str] = frozenset(
 )
 
 #: Highly generic English words that never contribute to a feature name.
-FUNCTION_WORDS: Collection[str] = frozenset(
+FUNCTION_WORDS: frozenset[str] = frozenset(
     {
         "and",
         "or",
@@ -181,7 +181,7 @@ FUNCTION_WORDS: Collection[str] = frozenset(
 
 #: Domain nouns that represent common form fields but not business entities.
 #: Stripped during extraction so "enquiry title description" → "enquiry".
-FORM_FIELD_TERMS: Collection[str] = frozenset(
+FORM_FIELD_TERMS: frozenset[str] = frozenset(
     {
         "title",
         "description",
@@ -210,7 +210,7 @@ FORM_FIELD_TERMS: Collection[str] = frozenset(
 )
 
 #: Combined set of all words that should ALWAYS be stripped.
-ALWAYS_STRIP: Collection[str] = GENERIC_VERBS | GENERIC_NOUNS | FUNCTION_WORDS | FORM_FIELD_TERMS
+ALWAYS_STRIP: frozenset[str] = GENERIC_VERBS | GENERIC_NOUNS | FUNCTION_WORDS | FORM_FIELD_TERMS
 
 # ---------------------------------------------------------------------------
 # Constants

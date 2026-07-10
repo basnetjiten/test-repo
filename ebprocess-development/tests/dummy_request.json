@@ -1,43 +1,182 @@
 {
-  "id": 44445,
-  "space_name": "AgentSwipe",
-  "ticket_id": "Epic-44445",
-  "title": "Project Configurations",
-  "description": "Set up the basic configurations for the project and modules.",
-  "platforms": [
-    "flutter",
-    "api"
-  ],
-  "project_repo": "https://bitbucket.org/basnetjiten7/test-repo.git",
-  "starter_types": {
-    "api": "nestjs",
-    "flutter": "flutter"
-  },
-  "tasks": [
-    {
-      "id": 41831,
-      "name": "Create enquiry form page with title and description and submit button",
-      "status": "todo",
-      "hours": [
+  "data": {
+    "getProjectPlanning": {
+      "id": 918,
+      "name": "ToBeMe Plan After Reconciliation",
+      "epics": [
         {
-          "estimatedHour": 1.0,
-          "taskId": 41831,
-          "platformId": 1,
-          "platform": {
-            "id": 1,
-            "name": "flutter"
-          }
+          "id": 39037,
+          "name": "Contact & Enquiry",
+          "tasks": [
+            {
+              "automation": false,
+              "name": "Submit Contact Enquiry",
+              "id": 276019,
+              "isFromJira": false,
+              "description": "Design and implement the Contact Us form with client-side validation and submission flow.",
+              "status": "To Do",
+              "phase": "Phase 1",
+              "platform": {
+                "id": 6,
+                "name": "Flutter",
+                "unitId": 4
+              },
+              "platformId": 6,
+              "userId": null,
+              "jiraIssueId": "500001",
+              "jiraIssueKey": "TBM-101",
+              "jiraIssueType": "Task",
+              "subTasks": []
+            },
+            {
+              "automation": false,
+              "name": "Submit Contact Enquiry",
+              "id": 276020,
+              "isFromJira": false,
+              "description": "Create enquiry API endpoint, validation, database schema and email notification service.",
+              "status": "To Do",
+              "phase": "Phase 1",
+              "platform": {
+                "id": 1,
+                "name": "API",
+                "unitId": 3
+              },
+              "platformId": 1,
+              "userId": null,
+              "jiraIssueId": "500002",
+              "jiraIssueKey": "TBM-102",
+              "jiraIssueType": "Task",
+              "subTasks": []
+            },
+            {
+              "automation": false,
+              "name": "Manage Enquiries",
+              "id": 276021,
+              "isFromJira": false,
+              "description": "Build CMS page to list, search, filter and update enquiry status.",
+              "status": "To Do",
+              "phase": "Phase 1",
+              "platform": {
+                "id": 4,
+                "name": "CMS",
+                "unitId": 4
+              },
+              "platformId": 4,
+              "userId": null,
+              "jiraIssueId": "500003",
+              "jiraIssueKey": "TBM-103",
+              "jiraIssueType": "Task",
+              "subTasks": []
+            },
+            {
+              "automation": false,
+              "name": "View Enquiries Dashboard",
+              "id": 276022,
+              "isFromJira": false,
+              "description": "Create enquiry listing page with pagination, filters and detail view in Web App.",
+              "status": "To Do",
+              "phase": "Phase 1",
+              "platform": {
+                "id": 2,
+                "name": "Web App",
+                "unitId": 3
+              },
+              "platformId": 2,
+              "userId": null,
+              "jiraIssueId": "500004",
+              "jiraIssueKey": "TBM-104",
+              "jiraIssueType": "Task",
+              "subTasks": []
+            }
+          ]
         },
         {
-          "estimatedHour": 1.0,
-          "taskId": 41831,
-          "platformId": 3,
-          "platform": {
-            "id": 3,
-            "name": "api"
-          }
+          "id": 39038,
+          "name": "News & Announcements",
+          "tasks": [
+            {
+              "automation": false,
+              "name": "Browse Latest News",
+              "id": 276023,
+              "isFromJira": false,
+              "description": "Implement news listing, search and detail screen in Flutter.",
+              "status": "To Do",
+              "phase": "Phase 1",
+              "platform": {
+                "id": 6,
+                "name": "Flutter",
+                "unitId": 4
+              },
+              "platformId": 6,
+              "userId": null,
+              "jiraIssueId": "500005",
+              "jiraIssueKey": "TBM-105",
+              "jiraIssueType": "Task",
+              "subTasks": []
+            },
+            {
+              "automation": false,
+              "name": "News Management API",
+              "id": 276024,
+              "isFromJira": false,
+              "description": "Develop CRUD APIs for news articles with search, pagination and publish status.",
+              "status": "To Do",
+              "phase": "Phase 1",
+              "platform": {
+                "id": 1,
+                "name": "API",
+                "unitId": 3
+              },
+              "platformId": 1,
+              "userId": null,
+              "jiraIssueId": "500006",
+              "jiraIssueKey": "TBM-106",
+              "jiraIssueType": "Task",
+              "subTasks": []
+            },
+            {
+              "automation": false,
+              "name": "Manage News Articles",
+              "id": 276025,
+              "isFromJira": false,
+              "description": "Create CMS interface to add, edit, publish and archive news articles.",
+              "status": "To Do",
+              "phase": "Phase 1",
+              "platform": {
+                "id": 4,
+                "name": "CMS",
+                "unitId": 4
+              },
+              "platformId": 4,
+              "userId": null,
+              "jiraIssueId": "500007",
+              "jiraIssueKey": "TBM-107",
+              "jiraIssueType": "Task",
+              "subTasks": []
+            },
+            {
+              "automation": false,
+              "name": "Public News Portal",
+              "id": 276026,
+              "isFromJira": false,
+              "description": "Build responsive news listing and article detail pages in Web App.",
+              "status": "To Do",
+              "phase": "Phase 1",
+              "platform": {
+                "id": 2,
+                "name": "Web App",
+                "unitId": 3
+              },
+              "platformId": 2,
+              "userId": null,
+              "jiraIssueId": "500008",
+              "jiraIssueKey": "TBM-108",
+              "jiraIssueType": "Task",
+              "subTasks": []
+            }
+          ]
         }
       ]
     }
-  ]
+  }
 }

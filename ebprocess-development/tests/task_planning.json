@@ -1,0 +1,210 @@
+{
+    "data": {
+        "getProjectPlanning": {
+            "id": 918,
+            "name": "ToBeMe App — Feature Rollout Plan",
+            "epics": [
+                {
+                    "id": 39042,
+                    "name": "Daily Tips Feed",
+                    "isCommentResolved": false,
+                    "chats": [],
+                    "tasks": [
+                        {
+                            "automation": false,
+                            "name": "Show daily wellness tips to users",
+                            "id": 276041,
+                            "isFromJira": false,
+                            "description": "Build a Flutter screen that displays the day's wellness tip as a card with an icon, short title, and body text. Fetch tip content from the API and show a loading skeleton while data loads.",
+                            "status": "To Do",
+                            "phase": "Phase 1",
+                            "originalEstimateHour": 4.0,
+                            "platform": {
+                                "id": 6,
+                                "name": "Flutter",
+                                "unitId": 4
+                            },
+                            "platformId": 6,
+                            "userId": null,
+                            "jiraIssueId": "493600",
+                            "jiraIssueKey": "EE4TMWT-560",
+                            "jiraIssueType": "Task",
+                            "subTasks": [],
+                            "storyBoardLink": null,
+                            "assigneeType": "Employee"
+                        },
+                        {
+                            "automation": false,
+                            "name": "Show daily wellness tips to users",
+                            "id": 276042,
+                            "isFromJira": false,
+                            "description": "Implement a REST API endpoint GET /tips/daily that returns today's tip object containing id, title, body, icon name, and category. Tips rotate based on the current date.",
+                            "status": "To Do",
+                            "phase": "Phase 1",
+                            "originalEstimateHour": 3.0,
+                            "platform": {
+                                "id": 1,
+                                "name": "API",
+                                "unitId": 3
+                            },
+                            "platformId": 1,
+                            "userId": null,
+                            "jiraIssueId": "493601",
+                            "jiraIssueKey": "EE4TMWT-561",
+                            "jiraIssueType": "Task",
+                            "subTasks": [],
+                            "storyBoardLink": null,
+                            "assigneeType": "Employee"
+                        },
+                        {
+                            "automation": false,
+                            "name": "Show daily wellness tips to users",
+                            "id": 276043,
+                            "isFromJira": false,
+                            "description": "Render a web app tips page that shows the current daily tip in a highlighted banner card and lists the past 7 tips in a scrollable feed below it.",
+                            "status": "To Do",
+                            "phase": "Phase 1",
+                            "originalEstimateHour": 3.0,
+                            "platform": {
+                                "id": 2,
+                                "name": "Web App",
+                                "unitId": 3
+                            },
+                            "platformId": 2,
+                            "userId": null,
+                            "jiraIssueId": "493602",
+                            "jiraIssueKey": "EE4TMWT-562",
+                            "jiraIssueType": "Task",
+                            "subTasks": [],
+                            "storyBoardLink": null,
+                            "assigneeType": "Employee"
+                        },
+                        {
+                            "automation": false,
+                            "name": "Show daily wellness tips to users",
+                            "id": 276044,
+                            "isFromJira": false,
+                            "description": "CMS admin panel to manage the tips library — allows admin to create, edit, reorder, and toggle active state of wellness tips that are served to users daily.",
+                            "status": "To Do",
+                            "phase": "Phase 1",
+                            "originalEstimateHour": 2.0,
+                            "platform": {
+                                "id": 4,
+                                "name": "CMS",
+                                "unitId": 4
+                            },
+                            "platformId": 4,
+                            "userId": null,
+                            "jiraIssueId": "493603",
+                            "jiraIssueKey": "EE4TMWT-563",
+                            "jiraIssueType": "Task",
+                            "subTasks": [],
+                            "storyBoardLink": null,
+                            "assigneeType": "Employee"
+                        }
+                    ]
+                },
+                {
+                    "id": 39043,
+                    "name": "Upcoming Events",
+                    "isCommentResolved": false,
+                    "chats": [],
+                    "tasks": [
+                        {
+                            "automation": false,
+                            "name": "Browse and view upcoming events",
+                            "id": 276045,
+                            "isFromJira": false,
+                            "description": "Build a Flutter events screen with a horizontal date-strip filter at the top and a list of event cards below. Each card shows the event name, date, time, and location. Tapping a card opens a detail screen.",
+                            "status": "To Do",
+                            "phase": "Phase 1",
+                            "originalEstimateHour": 5.0,
+                            "platform": {
+                                "id": 6,
+                                "name": "Flutter",
+                                "unitId": 4
+                            },
+                            "platformId": 6,
+                            "userId": null,
+                            "jiraIssueId": "493604",
+                            "jiraIssueKey": "EE4TMWT-564",
+                            "jiraIssueType": "Task",
+                            "subTasks": [],
+                            "storyBoardLink": null,
+                            "assigneeType": "Employee"
+                        },
+                        {
+                            "automation": false,
+                            "name": "Browse and view upcoming events",
+                            "id": 276046,
+                            "isFromJira": false,
+                            "description": "Implement REST API endpoints GET /events (paginated list with optional date filter) and GET /events/:id (single event detail) returning name, date, time, location, description, and cover image URL.",
+                            "status": "To Do",
+                            "phase": "Phase 1",
+                            "originalEstimateHour": 4.0,
+                            "platform": {
+                                "id": 1,
+                                "name": "API",
+                                "unitId": 3
+                            },
+                            "platformId": 1,
+                            "userId": null,
+                            "jiraIssueId": "493605",
+                            "jiraIssueKey": "EE4TMWT-565",
+                            "jiraIssueType": "Task",
+                            "subTasks": [],
+                            "storyBoardLink": null,
+                            "assigneeType": "Employee"
+                        },
+                        {
+                            "automation": false,
+                            "name": "Browse and view upcoming events",
+                            "id": 276047,
+                            "isFromJira": false,
+                            "description": "Render a web app events page with a grid of upcoming event cards. Each card displays cover image, event name, date, and location. Clicking a card opens a dedicated event detail page.",
+                            "status": "To Do",
+                            "phase": "Phase 1",
+                            "originalEstimateHour": 4.0,
+                            "platform": {
+                                "id": 2,
+                                "name": "Web App",
+                                "unitId": 3
+                            },
+                            "platformId": 2,
+                            "userId": null,
+                            "jiraIssueId": "493606",
+                            "jiraIssueKey": "EE4TMWT-566",
+                            "jiraIssueType": "Task",
+                            "subTasks": [],
+                            "storyBoardLink": null,
+                            "assigneeType": "Employee"
+                        },
+                        {
+                            "automation": false,
+                            "name": "Browse and view upcoming events",
+                            "id": 276048,
+                            "isFromJira": false,
+                            "description": "CMS interface to create and manage events — admin can add event name, date, time, location, description, and upload a cover image. Events can be published or saved as draft.",
+                            "status": "To Do",
+                            "phase": "Phase 1",
+                            "originalEstimateHour": 3.0,
+                            "platform": {
+                                "id": 4,
+                                "name": "CMS",
+                                "unitId": 4
+                            },
+                            "platformId": 4,
+                            "userId": null,
+                            "jiraIssueId": "493607",
+                            "jiraIssueKey": "EE4TMWT-567",
+                            "jiraIssueType": "Task",
+                            "subTasks": [],
+                            "storyBoardLink": null,
+                            "assigneeType": "Employee"
+                        }
+                    ]
+                }
+            ]
+        }
+    }
+}

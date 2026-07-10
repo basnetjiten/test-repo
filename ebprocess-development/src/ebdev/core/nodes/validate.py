@@ -26,10 +26,13 @@ from ebdev.core.nodes.common import send_progress
 from ebdev.core.spoq_utils import get_state_active_tasks
 from ebdev.models.task import TaskArtifacts, TaskArtifactState
 from ebdev.platforms import get_platform_strategy
+from ebdev.services import db
 from ebdev.services.epic_state import get_epic_state_service
+from ebdev.services.opencode import invoke_opencode
 
 if TYPE_CHECKING:
     from ebdev.models.graph_state import GraphState, JobContext
+    from ebdev.models.spoq import SPOQTask
 
 # ---------------------------------------------------------------------------
 # Module-level logger
@@ -48,6 +51,8 @@ async def _write_validation_state(
     *,
     passed: bool,
     platform_errors: dict[str, list[str]],
+    generated_artifacts: dict[str, dict[str, str]] | None = None,
+    spoq_tasks: list["SPOQTask"] | None = None,
 ) -> None:
     """
     Update ``state.json`` after a SPOQ validation wave completes.
@@ -62,6 +67,10 @@ async def _write_validation_state(
         ``True`` when all platforms passed; ``False`` on any failure.
     platform_errors:
         Per-platform error lists — used to derive journal path hints.
+    generated_artifacts:
+        Optional dictionary of generated artifacts from the GraphState to recover.
+    spoq_tasks:
+        Optional list of SPOQTask definitions to lookup task platforms.
 
     Notes
     -----
@@ -73,6 +82,11 @@ async def _write_validation_state(
 
     epic_dir = ctx.project_storage_dir() / ctx.spoq_epic_dir
     svc = get_epic_state_service(epic_dir)
+
+    # Pre-map tasks to their skills for fast platform lookup
+    task_skills = {}
+    if spoq_tasks:
+        task_skills = {t.id: t.skills_required for t in spoq_tasks}
 
     try:
         failure_count = sum(len(v) for v in platform_errors.values()) if not passed else 0
@@ -89,7 +103,24 @@ async def _write_validation_state(
         )
         for task_id in completed_ids:
             existing = snapshot.get_task(task_id)
-            platform = existing.platform if existing else ctx.platform
+            
+            # Resolve platform
+            if existing:
+                platform = existing.platform
+            else:
+                skills = task_skills.get(task_id)
+                if skills:
+                    platform = skills[0]
+                elif "api" in task_id:
+                    platform = "api"
+                elif "flutter" in task_id:
+                    platform = "flutter"
+                elif "web" in task_id:
+                    platform = "web"
+                elif "cms" in task_id:
+                    platform = "cms"
+                else:
+                    platform = ctx.platform
 
             # Attempt to derive the journal path from the known naming convention.
             journal_rel: str | None = None
@@ -104,16 +135,34 @@ async def _write_validation_state(
                     except ValueError:
                         journal_rel = str(candidate)
 
+            # Resolve other artifacts
+            art_from_state = None
+            if not existing and generated_artifacts and task_id in generated_artifacts:
+                art_from_state = generated_artifacts[task_id]
+
+            if existing:
+                contract_val = existing.artifacts.contract
+                schema_file_val = existing.artifacts.schema_file
+                verification_val = existing.artifacts.verification
+            elif art_from_state:
+                contract_val = art_from_state.get("contract") or None
+                schema_file_val = art_from_state.get("schema_file") or None
+                verification_val = art_from_state.get("verification") or None
+            else:
+                contract_val = None
+                schema_file_val = None
+                verification_val = None
+
             updated_artifacts = TaskArtifacts(
-                contract=existing.artifacts.contract if existing else None,
+                contract=contract_val,
                 journal=journal_rel,
-                schema_file=existing.artifacts.schema_file if existing else None,
-                verification=existing.artifacts.verification if existing else None,
+                schema_file=schema_file_val,
+                verification=verification_val,
             )
             task_state = TaskArtifactState(
                 task_id=task_id,
                 platform=platform,
-                status="passed" if passed else "evaluate_failed",
+                status="passed" if passed else "repairing",
                 artifacts=updated_artifacts,
                 repair_iteration=existing.repair_iteration if existing else 0,
                 evaluation_avg=None,
@@ -145,6 +194,7 @@ async def validate_node(state: GraphState) -> GraphState:
     """
     state.last_node = "evaluator_agent"
     ctx = state.context
+    assert ctx is not None, "validate_node requires a JobContext"
 
     is_spoq = state.is_spoq
     if is_spoq:
@@ -201,17 +251,15 @@ async def validate_node(state: GraphState) -> GraphState:
 
         loop = asyncio.get_running_loop()
 
-        def _on_opencode_progress(msg: str):
+        def _on_opencode_progress(msg: str) -> None:
             asyncio.run_coroutine_threadsafe(send_progress(state, f"{task_label} Evaluator: {msg}"), loop)
 
         session_id_key = f"{ctx.ticket_id}_{platform}"
         session_ids = getattr(state, "opencode_session_ids", {}) or {}
-        from ebdev.services import db
 
         existing_session_id = session_ids.get(platform) or await db.get_session_id(session_id_key)
 
         try:
-            from ebdev.services.opencode import invoke_opencode
 
             result, _ = await asyncio.to_thread(
                 invoke_opencode,
@@ -275,10 +323,12 @@ async def validate_node(state: GraphState) -> GraphState:
                 logger.info("Marked %d SPOQ tasks as completed in state.", len(completed_ids))
                 # Mirror completion into the .ebpearls artifact registry.
                 await _write_validation_state(
-                    ctx=state.context,
+                    ctx=ctx,
                     completed_ids=completed_ids,
                     passed=True,
                     platform_errors={},
+                    generated_artifacts=state.generated_artifacts,
+                    spoq_tasks=state.spoq_tasks,
                 )
 
                 # Update GraphState.generated_artifacts
@@ -334,10 +384,12 @@ async def validate_node(state: GraphState) -> GraphState:
                 }
                 if failed_ids:
                     await _write_validation_state(
-                        ctx=state.context,
+                        ctx=ctx,
                         completed_ids=failed_ids,
                         passed=False,
                         platform_errors=platform_errors,
+                        generated_artifacts=state.generated_artifacts,
+                        spoq_tasks=state.spoq_tasks,
                     )
 
                     # Update GraphState.generated_artifacts
